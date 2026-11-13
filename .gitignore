@@ -1,0 +1,29 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Virtual Environment
+venv/
+.venv/
+env/
+ryu-env/
+
+# Runtime and temp logs
+*.log
+*.pid
+mn_cleanup.sh
+/tmp/cdn_content/
+/tmp/client_downloads/
+
+# Dynamic results
+results/live_routes.json
+results/data/*.csv
+!results/data/.gitkeep
+
+# IDE files
+.vscode/
+.idea/
+.DS_Store
