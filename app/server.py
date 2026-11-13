@@ -1,7 +1,7 @@
 """
-Smart CDN - Content Streaming Server
-Streams files in 64 KB binary chunks with byte-offset support.
-Owned by Developer 1 (Supreeth Prahalada) - Sprint 1.
+Smart CDN - Content Streaming Server with Heartbeat Reporting
+Streams files in 64 KB binary chunks and emits health heartbeats (FR-4, FR-7).
+Owned by Developer 1 (Supreeth Prahalada) - Sprint 2.
 """
 
 import socket
@@ -12,7 +12,9 @@ import argparse
 import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config.settings import CONTENT_PORT, CHUNK_SIZE, CONTENT_DIR
+from config.settings import (
+    CONTENT_PORT, CHUNK_SIZE, CONTENT_DIR, HB_LISTEN_IP, HB_PORT, HEARTBEAT_INTERVAL
+)
 
 
 class ContentServer:
@@ -24,17 +26,35 @@ class ContentServer:
         self.lock = threading.Lock()
         self.running = True
 
-        # Ensure content directory exists
         os.makedirs(CONTENT_DIR, exist_ok=True)
+
+    def heartbeat_loop(self):
+        """Emits STATUS heartbeat to controller every 2.0s via UDP (FR-4)."""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print(f"[{self.server_id}] Heartbeat thread started -> target {HB_LISTEN_IP}:{HB_PORT} every {HEARTBEAT_INTERVAL}s")
+
+        while self.running:
+            try:
+                with self.lock:
+                    conns = self.active_connections
+                timestamp = time.time()
+                # Wire format from SRS Appendix A: STATUS <id> <conns> <timestamp>\n
+                msg = f"STATUS {self.server_id} {conns} {timestamp:.3f}\n"
+                sock.sendto(msg.encode('utf-8'), (HB_LISTEN_IP, HB_PORT))
+            except Exception as e:
+                # Controller might be booting up, keep trying
+                pass
+            time.sleep(HEARTBEAT_INTERVAL)
+
+        sock.close()
 
     def handle_client(self, client_sock: socket.socket, client_addr):
         with self.lock:
             self.active_connections += 1
 
-        print(f"[{self.server_id}] New connection from {client_addr} (Active: {self.active_connections})")
+        print(f"[{self.server_id}] Connection started from {client_addr} (Active: {self.active_connections})")
 
         try:
-            # Read request line until newline
             req_data = b""
             while b"\n" not in req_data:
                 chunk = client_sock.recv(1024)
@@ -67,12 +87,9 @@ class ContentServer:
                 return
 
             remaining_bytes = total_size - offset
-
-            # Send protocol header line
             header = f"OK {total_size} {remaining_bytes}\n"
             client_sock.sendall(header.encode('utf-8'))
 
-            # Stream binary data in 64 KB pieces
             with open(filepath, 'rb') as f:
                 f.seek(offset)
                 bytes_sent = 0
@@ -83,7 +100,7 @@ class ContentServer:
                     client_sock.sendall(chunk)
                     bytes_sent += len(chunk)
 
-            print(f"[{self.server_id}] Completed stream of {filename} ({bytes_sent} bytes sent to {client_addr})")
+            print(f"[{self.server_id}] Streamed {bytes_sent} bytes of {filename} to {client_addr}")
 
         except Exception as e:
             print(f"[{self.server_id}] Stream error: {e}")
@@ -97,13 +114,16 @@ class ContentServer:
             print(f"[{self.server_id}] Connection closed for {client_addr} (Active: {self.active_connections})")
 
     def start(self):
+        # Start heartbeat sender daemon thread
+        hb_thread = threading.Thread(target=self.heartbeat_loop, daemon=True)
+        hb_thread.start()
+
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_sock.bind((self.bind_ip, self.port))
         server_sock.listen(50)
 
         print(f"[{self.server_id}] Content server listening on {self.bind_ip}:{self.port}")
-        print(f"[{self.server_id}] Content directory: {CONTENT_DIR}")
 
         try:
             while self.running:
@@ -112,6 +132,7 @@ class ContentServer:
                 t.start()
         except KeyboardInterrupt:
             print(f"\n[{self.server_id}] Shutting down server...")
+            self.running = False
         finally:
             server_sock.close()
 
