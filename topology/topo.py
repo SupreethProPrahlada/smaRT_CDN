@@ -1,10 +1,16 @@
+#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
 from mininet.topo import Topo
 from mininet.net import Mininet
 from mininet.node import RemoteController, OVSSwitch
 from mininet.link import TCLink
 from mininet.cli import CLI
 from mininet.log import setLogLevel
-import sys, os
+
+# Ensure Mininet host shells automatically inherit uv virtual environment
+os.environ['PATH'] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get('PATH', '')
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config.settings import CLIENT_IPS, CLIENT_MACS, SERVERS, OFP_CONTROLLER_PORT
@@ -23,15 +29,19 @@ class SmartCDNTopo(Topo):
             sw = {'srv1': s2, 'srv2': s3, 'srv3': s4}[s_id]
             self.addLink(self.addHost(s_id, ip=f"{s_info['ip']}/24", mac=s_info['mac']), sw, cls=TCLink, bw=100, delay='1ms')
 
+        # Direct shaped trunk links (FR-1)
         self.addLink(s1, s2, cls=TCLink, bw=100, delay='5ms')   # Primary
         self.addLink(s1, s3, cls=TCLink, bw=50, delay='20ms')   # Secondary
         self.addLink(s1, s4, cls=TCLink, bw=10, delay='50ms')   # Backup
 
-if __name__ == '__main__':
-    setLogLevel('info')
+def run():
     topo = SmartCDNTopo()
     net = Mininet(topo=topo, switch=OVSSwitch, link=TCLink, controller=None)
     net.addController('c0', controller=RemoteController, ip='127.0.0.1', port=OFP_CONTROLLER_PORT)
     net.start()
     CLI(net)
     net.stop()
+
+if __name__ == '__main__':
+    setLogLevel('info')
+    run()
