@@ -1,5 +1,4 @@
 import argparse
-import csv
 import hashlib
 import os
 import socket
@@ -9,12 +8,13 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from config.transfer_logger import append_transfer
+
 from config.settings import (
     VIP_IP,
     CONTENT_PORT,
     CHUNK_SIZE,
     CLIENT_DOWNLOAD_DIR,
-    CLIENT_TRANSFERS_CSV,
 )
 
 
@@ -121,39 +121,18 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
             f"in {duration:.2f}s ({mbps:.2f} Mbps)"
         )
 
-    os.makedirs(os.path.dirname(CLIENT_TRANSFERS_CSV), exist_ok=True)
-    write_header = not os.path.isfile(CLIENT_TRANSFERS_CSV)
-
-    with open(CLIENT_TRANSFERS_CSV, "a", newline="", encoding="utf-8") as csv_file:
-        writer = csv.writer(csv_file)
-        if write_header:
-            writer.writerow(
-                [
-                    "timestamp",
-                    "client_id",
-                    "target_ip",
-                    "filename",
-                    "size_bytes",
-                    "ttfb_ms",
-                    "duration_s",
-                    "throughput_mbps",
-                    "sha256_match",
-                ]
-            )
-
-        writer.writerow(
-            [
-                datetime.now().isoformat(),
-                client_id,
-                target_ip,
-                filename,
-                received,
-                round(ttfb, 2),
-                round(duration, 3),
-                round(mbps, 2),
-                hash_match,
-            ]
-        )
+    append_transfer({
+        "timestamp": datetime.now().isoformat(),
+        "client_id": client_id,
+        "target_ip": target_ip,
+        "filename": filename,
+        "size_bytes": received,
+        "ttfb_ms": round(ttfb, 2),
+        "duration_s": round(duration, 3),
+        "throughput_mbps": round(mbps, 2),
+        "sha256_match": hash_match,
+        "status": status,
+    })
 
 
 if __name__ == "__main__":
