@@ -1,13 +1,23 @@
 ## Developer Environment Setup
 
-### Why Two Tools?
-- **uv** manages project Python dependencies (config/, app/, scripts/) via pyproject.toml.
-- **ryu-env** is a separate Python 3.9 venv required ONLY for Ryu 4.34 (incompatible with Python 3.10+). Not managed by uv.
+### One Python Environment with uv
+This repository is configured for **one Python 3.9 environment managed by uv**. The `pyproject.toml` and `uv.lock` include the project dependencies, Ryu, Mininet's Python package, and development test tools. Do not create or activate a separate `ryu-env` for this repository.
+
+Ubuntu system packages are still required for Mininet/Open vSwitch. `uv` manages Python packages; it does not install or replace system networking services.
 
 ### One-Time Setup
-Install project dependencies: uv sync
-Activate project environment: source .venv/bin/activate
-For Ryu controller only: source ~/ryu-env/bin/activate
+From the repository root:
+
+```bash
+# Install uv if it is not already installed:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Open a new terminal if needed, then:
+cd ~/smaRT_CDN
+uv sync --all-groups
+```
+
+This creates or updates the local `.venv` from the locked dependencies. Use `uv run ...` for commands, or activate that same environment with `source .venv/bin/activate`.
 
 ---
 
@@ -85,38 +95,67 @@ Instead of requiring clients to know physical backend server IP addresses, clien
 | **Peak Trunk Utilization** | **33.4% – 55.0%** captured live on `s1-s2` during active transfer | Link-bound on `s1-s3` |
 ---
 ## 🚀 Execution & Quickstart Guide
+
+All Python commands use the same uv-managed `.venv`. Run Ryu and the dashboard as your normal Ubuntu user. Mininet needs root privileges, so launch its topology with the explicit Python interpreter from `.venv`.
+
 ### 1. Start Ryu Controller (Terminal 1)
-```
+```bash
 cd ~/smaRT_CDN
-source ~/ryu-env/bin/activate
-# Run in Default Dynamic Mode:
-ryu-manager controller/cdn_controller.py
-# OR Run with Low-Latency Gaming Profile:
-# CDN_PROFILE=gaming ryu-manager controller/cdn_controller.py
+uv run ryu-manager controller/cdn_controller.py
 ```
-### 2. Launch Mininet Topology & Servers (Terminal 2)
-```
+Keep this terminal running.
+
+### 2. Launch Mininet Topology (Terminal 2)
+```bash
 cd ~/smaRT_CDN
 sudo mn -c
-sudo python3 topology/topo.py
-# Inside Mininet CLI, start edge replica servers:
+sudo env "PATH=$PWD/.venv/bin:$PATH" "$PWD/.venv/bin/python" topology/topo.py
+```
+
+### 3. Start Edge Replica Servers (inside the Mininet CLI)
+```text
 mininet> srv1 python3 app/server.py --id srv1 --ip 10.0.0.11 &
 mininet> srv2 python3 app/server.py --id srv2 --ip 10.0.0.12 &
 mininet> srv3 python3 app/server.py --id srv3 --ip 10.0.0.13 &
 ```
-### 3. Launch Live NOC Dashboard (Terminal 3)
-```
+
+### 4. Launch Live NOC Dashboard (Terminal 3)
+```bash
 cd ~/smaRT_CDN
-python3 scripts/dashboard.py
+uv run python scripts/dashboard.py
 ```
-### 4. Run Client Downloads & Stress Tests (Inside Mininet CLI)
+
+### 5. Run Downloads and Integrity-Checked Stress Tests (inside Mininet CLI)
+The Mininet hosts in this setup share the filesystem. Create the test file once:
+```text
+mininet> srv1 mkdir -p /tmp/cdn_content
+mininet> srv1 dd if=/dev/urandom of=/tmp/cdn_content/test_10M.bin bs=1M count=10
+mininet> srv1 sha256sum /tmp/cdn_content/test_10M.bin
 ```
-# Single client download via Anycast VIP:
-mininet> c1 python3 app/client.py --id c1 --file test_10M.bin
-# 3 concurrent streams against Anycast VIP:
-mininet> c1 python3 scripts/stress_test.py --concurrency 3 --file test_10M.bin
+
+Copy the 64-character SHA-256 digest from the output and use it in these commands:
+
+Single download:
+```text
+mininet> c1 python3 app/client.py --id c1 --file test_10M.bin --hash <SHA256>
 ```
+
+Six concurrent streams:
+```text
+mininet> c1 python3 scripts/stress_test.py --concurrency 6 --file test_10M.bin --hash <SHA256>
+```
+
+Replace `<SHA256>` with the actual digest. `PASS` means the transfer completed and its content matched the expected SHA-256 hash.
+
+### 6. Stop the Experiment
+Exit the Mininet CLI with `exit`, then clean up Mininet from a normal terminal:
+```bash
+sudo mn -c
+```
+Stop Ryu and the dashboard with `Ctrl+C` in their respective terminals.
+
 ---
+
 ## Automated Test Suite (Sprints 1–2)
 Install `pytest` separately (it is not currently listed in `pyproject.toml`) and run the fast tests from the repository root:
 ```
