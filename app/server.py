@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+"""Content streaming server with diagnostic PING and UDP heartbeats (FR-4, FR-7)."""
 import socket, threading, os, sys, argparse, time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -32,6 +34,14 @@ class ContentServer:
                 if not c: break
                 req += c
             parts = req.decode(errors='ignore').strip().split()
+            if not parts: return
+
+            # Reference feature: PING diagnostic
+            if len(parts) == 1 and parts[0] == "PING":
+                with self.lock: c = self.active_connections
+                sock.sendall(f"PONG {self.server_id} {c}\n".encode())
+                return
+
             if len(parts) >= 3 and parts[0] == "GET":
                 filename, offset = os.path.basename(parts[1]), int(parts[2])
                 path = os.path.join(CONTENT_DIR, filename)

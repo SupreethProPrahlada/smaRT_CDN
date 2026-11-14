@@ -15,13 +15,17 @@ from config.settings import (
 from controller.paths import DPID_S1, S1_TRUNK_PORTS, SERVER_SWITCH_PORTS, add_flow
 from controller.selector import ServerSelector
 
+# Reference feature: Environment variable overrides
+MODE = os.environ.get('CDN_MODE', DEFAULT_CDN_MODE)
+PIN_SERVER = os.environ.get('CDN_PIN_SERVER')
+
 class SmartCDNController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.datapaths = {}
-        self.selector = ServerSelector(cdn_mode=DEFAULT_CDN_MODE)
+        self.selector = ServerSelector(cdn_mode=MODE)
         self.server_telemetry = {
             'srv1': {'status': 'UP', 'rtt_ms': 10.0, 'utilization': 0.0, 'active_conns': 0, 'capacity': 100},
             'srv2': {'status': 'UP', 'rtt_ms': 40.0, 'utilization': 0.0, 'active_conns': 0, 'capacity': 50},
@@ -29,6 +33,7 @@ class SmartCDNController(app_manager.RyuApp):
         }
         self.port_stats_history = {}
         self.last_log_time = time.time()
+        self.logger.info("Smart CDN Controller starting | Mode: %s | Pin Server: %s", MODE, PIN_SERVER)
         hub.spawn(self._monitor_loop)
         hub.spawn(self._probe_loop)
 
@@ -39,6 +44,10 @@ class SmartCDNController(app_manager.RyuApp):
         self.datapaths[dpid] = dp
         parser, ofproto = dp.ofproto_parser, dp.ofproto
 
+        # Reference feature: wipe stale flows from prior controller runs
+        dp.send_msg(parser.OFPFlowMod(datapath=dp, command=ofproto.OFPFC_DELETE, out_port=ofproto.OFPP_ANY, out_group=ofproto.OFPG_ANY, match=parser.OFPMatch()))
+
+        # Table-miss rule
         add_flow(dp, priority=0, match=parser.OFPMatch(), actions=[parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)])
 
         if dpid in SERVER_SWITCH_PORTS:
@@ -141,26 +150,33 @@ class SmartCDNController(app_manager.RyuApp):
         pkt_tcp = pkt.get_protocol(tcp.tcp)
         if dpid == DPID_S1 and pkt_ip and pkt_tcp and pkt_ip.dst == VIP_IP and pkt_tcp.dst_port == CONTENT_PORT:
             cid = next((k for k, v in CLIENT_IPS.items() if v == pkt_ip.src), "c1")
-            srv = self.selector.select_server(cid, self.server_telemetry)
+            if PIN_SERVER and PIN_SERVER in SERVERS:
+                srv = SERVERS[PIN_SERVER]
+            else:
+                srv = self.selector.select_server(cid, self.server_telemetry)
+
             trunk = S1_TRUNK_PORTS[srv['id']]
             parser = dp.ofproto_parser
             self.logger.info(f"[Route Decision] Mode={self.selector.cdn_mode} | Client {pkt_ip.src} -> {srv['id']} (RTT={self.server_telemetry[srv['id']]['rtt_ms']}ms Util={self.server_telemetry[srv['id']]['utilization']*100:.1f}%)")
 
             add_flow(dp, priority=100, match=parser.OFPMatch(in_port=in_port, eth_type=0x0800, ip_proto=6, ipv4_src=pkt_ip.src, ipv4_dst=VIP_IP, tcp_dst=CONTENT_PORT), actions=[parser.OFPActionSetField(ipv4_dst=srv['ip']), parser.OFPActionSetField(eth_dst=srv['mac']), parser.OFPActionOutput(trunk)], idle_timeout=60)
             add_flow(dp, priority=100, match=parser.OFPMatch(in_port=trunk, eth_type=0x0800, ip_proto=6, ipv4_src=srv['ip'], ipv4_dst=pkt_ip.src, tcp_src=CONTENT_PORT), actions=[parser.OFPActionSetField(ipv4_src=VIP_IP), parser.OFPActionSetField(eth_src=VIP_MAC), parser.OFPActionOutput(in_port)], idle_timeout=60)
-
             dp.send_msg(parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id, in_port=in_port, actions=[parser.OFPActionSetField(ipv4_dst=srv['ip']), parser.OFPActionSetField(eth_dst=srv['mac']), parser.OFPActionOutput(trunk)], data=msg.data if msg.buffer_id == dp.ofproto.OFP_NO_BUFFER else None))
 
     def export_live_routes(self):
+        """Reference feature: Atomic write prevents readers from seeing half-written files."""
         try:
             os.makedirs(os.path.dirname(LIVE_ROUTES_JSON), exist_ok=True)
-            with open(LIVE_ROUTES_JSON, 'w') as f:
-                json.dump({'timestamp': time.time(), 'cdn_mode': self.selector.cdn_mode, 'servers': self.server_telemetry}, f, indent=2)
+            temp_path = LIVE_ROUTES_JSON + '.tmp'
+            snapshot = {'timestamp': time.time(), 'cdn_mode': self.selector.cdn_mode, 'servers': self.server_telemetry}
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(snapshot, f, indent=2)
+            os.replace(temp_path, LIVE_ROUTES_JSON)
         except Exception: pass
 
     def log_controller_status(self):
         self.logger.info("-------------------- Smart CDN State (5s Log) --------------------")
-        self.logger.info(f"Mode: {self.selector.cdn_mode.upper()}")
+        self.logger.info(f"Mode: {self.selector.cdn_mode.upper()} | Pin: {PIN_SERVER or 'None'}")
         for s, d in self.server_telemetry.items():
             self.logger.info(f"  [{s}] Status: {d['status']} | RTT: {d['rtt_ms']:6.2f} ms | Util: {d['utilization']*100:5.1f}% | Conns: {d['active_conns']}")
         self.logger.info("-----------------------------------------------------------------")
