@@ -87,7 +87,7 @@ def render_dashboard():
         print(f"{BOLD}{CYAN}==============================================================================={RESET}")
         print(f"{BOLD}{CYAN}             smaRT_CDN TELEMETRY & NETWORK OPERATIONS CENTER (NOC)             {RESET}")
         print(f"{BOLD}{CYAN}==============================================================================={RESET}")
-        print(f" {BOLD}System Time:{RESET} {t_str}   |   {BOLD}Mode:{RESET} {GREEN if mode == 'DYNAMIC' else YELLOW}{mode}{RESET}   |   {BOLD}Optimal Replica:{RESET} {GREEN}{best_srv.upper()} ({lowest_rtt:.1f} ms){RESET}")
+        print(f" {BOLD}System Time:{RESET} {t_str}   |   {BOLD}Mode:{RESET} {GREEN if mode == 'DYNAMIC' else YELLOW}{mode}{RESET}   |   {BOLD}Lowest RTT Replica:{RESET} {GREEN}{best_srv.upper()} ({lowest_rtt:.1f} ms){RESET}")
         print("-------------------------------------------------------------------------------")
         print(f" {BOLD}{'SERVER':<7} {'IP ADDRESS':<13} {'STATUS':<9} {'RTT LATENCY':<24} {'UTILIZATION':<17} {'TRUNK LINK'}{RESET}")
         print("-------------------------------------------------------------------------------")
@@ -119,7 +119,7 @@ def render_dashboard():
                 size_mb = size_bytes / (1024 * 1024)
                 mbps = safe_float(t.get('throughput_mbps') or t.get('mbps') or 0.0)
                 dur = safe_float(t.get('duration_s') or t.get('duration_sec') or t.get('duration') or 0.0)
-                print(f"   • {c_id:<10} | Payload: {size_mb:4.1f} MB | Time: {dur:4.2f}s | Speed: {BOLD}{mbps:5.2f} Mbps{RESET} | {GREEN}PASS (100% Hash Match){RESET}")
+                print(f"   • {c_id:<10} | Payload: {size_mb:4.1f} MB | Time: {dur:4.2f}s | Speed: {BOLD}{mbps:5.2f} Mbps{RESET} | {GREEN}Logged Transfer{RESET}")
         else:
             print(f"   {DIM}No transfers logged yet.{RESET}")
 

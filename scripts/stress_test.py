@@ -61,8 +61,13 @@ def download_worker(worker_id: int, filename: str, vip: str, port: int):
             total_bytes += len(chunk)
             sha256.update(chunk)
 
+        # Validate completeness
+        advertised = int(line.split()[1]) if line.startswith('OK') else 0
+        if advertised > 0 and total_bytes != advertised:
+            error_msg = f"Incomplete: got {total_bytes} of {advertised} bytes"
+        else:
+            success = True
         s.close()
-        success = True
     except Exception as e:
         error_msg = str(e)
 
