@@ -25,7 +25,7 @@ results_lock = threading.Lock()
 worker_results = []
 
 
-def download_worker(worker_id, filename, vip, port, expected_hash):
+def download_worker(worker_id, filename, vip, port, expected_hash=None):
     start = time.time()
     ttfb_ms = 0.0
     received = 0
@@ -35,8 +35,11 @@ def download_worker(worker_id, filename, vip, port, expected_hash):
     hash_match = None
 
     try:
-        with socket.create_connection((vip, port), timeout=15) as sock:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if hasattr(sock, "settimeout"):
             sock.settimeout(30)
+        sock.connect((vip, port))
+        try:
             sock.sendall(f"GET {filename} 0\n".encode("utf-8"))
 
             header_buffer = b""
@@ -83,23 +86,25 @@ def download_worker(worker_id, filename, vip, port, expected_hash):
                 received += len(chunk)
                 hasher.update(chunk)
 
-        digest = hasher.hexdigest()
-        complete = received == expected_bytes
+            digest = hasher.hexdigest()
+            complete = received == expected_bytes
 
-        if expected_hash is not None:
-            hash_match = digest.lower() == expected_hash.lower()
+            if expected_hash is not None:
+                hash_match = digest.lower() == expected_hash.lower()
 
-        if not complete:
-            status = "FAIL"
-            error = f"incomplete: received {received} of {expected_bytes} bytes"
-        elif expected_hash is None:
-            status = "UNVERIFIED"
-        elif hash_match:
-            status = "PASS"
-        else:
-            status = "FAIL"
-            error = "SHA-256 hash mismatch"
+            if not complete:
+                status = "FAIL"
+                error = f"incomplete: received {received} of {expected_bytes} bytes"
+            elif expected_hash is None:
+                status = "UNVERIFIED"
+            elif hash_match:
+                status = "PASS"
+            else:
+                status = "FAIL"
+                error = "SHA-256 hash mismatch"
 
+        finally:
+            sock.close()
     except (OSError, RuntimeError, ConnectionError) as exc:
         digest = hasher.hexdigest()
         status = "FAIL"
@@ -121,6 +126,7 @@ def download_worker(worker_id, filename, vip, port, expected_hash):
         "mbps": mbps,
         "sha256": digest,
         "sha256_match": hash_match,
+        "success": status in ("PASS", "UNVERIFIED"),
         "status": status,
         "error": error,
     }

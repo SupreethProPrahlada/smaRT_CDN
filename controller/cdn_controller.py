@@ -132,7 +132,12 @@ class SmartCDNController(app_manager.RyuApp):
         if pkt_ip and pkt_udp and pkt_udp.dst_port == HB_PORT:
             try:
                 p = msg.data[14 + pkt_ip.header_length*4 + 8:].decode(errors='ignore').strip().split()
-                if len(p) >= 3 and p[0] == "STATUS" and p[1] in self.server_telemetry:
+                if (
+                    len(p) >= 3
+                    and p[0] == "STATUS"
+                    and p[1] in self.server_telemetry
+                    and SERVERS.get(p[1], {}).get('ip') == pkt_ip.src
+                ):
                     self.server_telemetry[p[1]]['active_conns'] = int(p[2])
                     self.server_telemetry[p[1]]['status'] = 'UP'
             except Exception: pass
@@ -152,11 +157,14 @@ class SmartCDNController(app_manager.RyuApp):
             dp.send_msg(parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id, in_port=in_port, actions=[parser.OFPActionSetField(ipv4_dst=srv['ip']), parser.OFPActionSetField(eth_dst=srv['mac']), parser.OFPActionOutput(trunk)], data=msg.data if msg.buffer_id == dp.ofproto.OFP_NO_BUFFER else None))
 
     def export_live_routes(self):
+        tmp_path = f"{LIVE_ROUTES_JSON}.tmp"
         try:
             os.makedirs(os.path.dirname(LIVE_ROUTES_JSON), exist_ok=True)
-            with open(LIVE_ROUTES_JSON, 'w') as f:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump({'timestamp': time.time(), 'cdn_mode': self.selector.cdn_mode, 'servers': self.server_telemetry}, f, indent=2)
-        except Exception: pass
+            os.replace(tmp_path, LIVE_ROUTES_JSON)
+        except Exception as exc:
+            self.logger.warning(f"[Export] Failed to write {LIVE_ROUTES_JSON}: {exc}")
 
     def log_controller_status(self):
         self.logger.info("-------------------- Smart CDN State (5s Log) --------------------")

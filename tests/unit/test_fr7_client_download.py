@@ -59,7 +59,6 @@ def test_tc31_client_hash_mismatch_is_reported(monkeypatch, tmp_path, capsys):
     assert "FAIL" in capsys.readouterr().out
 
 
-@pytest.mark.xfail(strict=True, reason="Known defect: incomplete data is accepted when expected_hash is omitted")
 def test_tc32_client_rejects_truncated_payload_without_expected_hash(monkeypatch, tmp_path, capsys):
     """TC32 FR-7: truncated transfer must not be reported successful without a supplied hash."""
     sock = FakeStreamSocket([b"OK 8 8\nabcd", b""])
@@ -74,7 +73,6 @@ def test_tc32_client_rejects_truncated_payload_without_expected_hash(monkeypatch
     assert ("FAIL" in output, rows[0]["sha256_match"]) == (True, "False")
 
 
-@pytest.mark.xfail(strict=True, reason="Known defect: empty server error response raises IndexError in the client")
 def test_tc41_client_handles_missing_file_response(monkeypatch, tmp_path):
     """TC41 FR-7: a closed connection for a missing file should be a controlled failure."""
     sock = FakeStreamSocket([b""])

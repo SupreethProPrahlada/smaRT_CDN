@@ -33,7 +33,11 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
     hasher = hashlib.sha256()
 
     try:
-        with socket.create_connection((target_ip, port), timeout=15) as sock:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if hasattr(sock, "settimeout"):
+            sock.settimeout(15)
+        sock.connect((target_ip, port))
+        try:
             sock.sendall(f"GET {filename} 0\n".encode())
 
             header_buffer = b""
@@ -88,6 +92,7 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
                 hash_match = hasher.hexdigest().lower() == expected_hash.lower()
 
             if not complete:
+                hash_match = False
                 status = "FAIL"
                 error_message = (
                     f"incomplete download: received {received} of "
@@ -101,13 +106,15 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
                 status = "FAIL"
                 error_message = "SHA-256 hash mismatch"
 
+        finally:
+            sock.close()
     except (OSError, RuntimeError, ConnectionError) as exc:
         duration = time.time() - start
         mbps = (received * 8) / (duration * 1_000_000) if duration > 0 else 0.0
         error_message = str(exc)
 
     if error_message:
-        print(f"[{client_id}] Download failed: {error_message}")
+        print(f"[{client_id}] Download FAIL: {error_message}")
     else:
         print(
             f"[{client_id}] Download {status}: {received} bytes "
@@ -131,7 +138,6 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
                     "duration_s",
                     "throughput_mbps",
                     "sha256_match",
-                    "status",
                 ]
             )
 
@@ -146,7 +152,6 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
                 round(duration, 3),
                 round(mbps, 2),
                 hash_match,
-                status,
             ]
         )
 

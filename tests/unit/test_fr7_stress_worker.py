@@ -39,7 +39,6 @@ def test_tc36_stress_worker_hash_matches_received_payload(monkeypatch):
     assert result["sha256"] == hashlib.sha256(payload).hexdigest()
 
 
-@pytest.mark.xfail(strict=True, reason="Known defect: stress worker treats any clean EOF as a complete transfer")
 def test_tc37_stress_worker_rejects_truncated_payload(monkeypatch):
     """TC37 FR-7: stress worker must reject payload shorter than the server header total."""
     stress_module.worker_results.clear()
