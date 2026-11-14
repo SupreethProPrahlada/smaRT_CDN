@@ -37,6 +37,10 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
             received += len(b)
 
     dur = time.time() - start
+        # Validate completeness (tester Issue 1 fix)
+        if received != remain:
+            match = False
+            print(f"[WARN] Incomplete transfer: got {received} of {remain} bytes")
     mbps = (received * 8) / (dur * 1_000_000)
     match = (hasher.hexdigest().lower() == expected_hash.lower()) if expected_hash else True
     print(f"[{client_id}] Download complete: {received} bytes in {dur:.2f}s ({mbps:.2f} Mbps) | {'PASS' if match else 'FAIL'}")
