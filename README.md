@@ -9,7 +9,7 @@
 ## 📖 Executive Summary
 Smart CDN is an intelligent, Software-Defined Content Delivery Network built on **OpenFlow 1.3**, the **Ryu SDN Controller**, and **Mininet**. 
 
-Instead of requiring clients to know the physical IP addresses of edge replica servers, clients communicate with a single **Anycast Virtual IP (VIP: `10.0.0.100:8000`)**. Ingress switch `s1` dynamically inspects live network telemetry (RTT latency, trunk port utilization, and active server connections) and rewrites Layer 4 bidirectional NAT flow rules to seamlessly direct traffic to the optimal backend server replica with zero data corruption.
+Instead of requiring clients to know physical backend server IP addresses, clients communicate with a single **Anycast Virtual IP (VIP: `10.0.0.100:8000`)**. Ingress switch `s1` dynamically inspects live network telemetry (RTT latency, trunk port utilization, and active server load) and rewrites Layer 4 bidirectional NAT flow rules to seamlessly direct traffic to the optimal backend server replica with zero data corruption.
 
 ---
 
@@ -50,10 +50,9 @@ Instead of requiring clients to know the physical IP addresses of edge replica s
 ## 🎯 Developer 1 Deliverables (Sprints 0 - 2)
 
 ### 1. Sprint 0: Foundations & Architecture
-* **Standard Repository Scaffold:** Structured tree separating `config/`, `topology/`, `controller/`, `app/`, `tests/`, `results/`, and `docs/`.
+* **Standard Repository Scaffold:** Structured tree separating `config/`, `topology/`, `controller/`, `app/`, `tests/`, `results/`, `scripts/`, and `docs/`.
 * **Central Data Dictionary (`config/settings.py`):** Single source of truth for VIPs, hardware MACs, streaming ports (8000), telemetry ports (9000), and link profiles.
 * **Interface Contracts (`docs/INTERFACE_CONTRACTS.md`):** Formal specifications for OpenFlow flow tables, UDP telemetry schemas, and chunk protocols.
-* **Reproducible Dependency Environment:** Modern pinned Python dependencies compatible with Ryu and Mininet.
 
 ### 2. Sprint 1: Baseline Architecture & VIP Streaming
 * **Mininet Software-Defined Topology (`topology/topo.py`):** Multi-tier topology with shaped asymmetric links, auto-inheriting the virtual environment PATH.
@@ -67,13 +66,17 @@ Instead of requiring clients to know the physical IP addresses of edge replica s
 ### 3. Sprint 2: Real-Time Telemetry & Smart Server Selection
 * **3-Factor Cost Selection Engine (`controller/selector.py`):**
   Dynamically evaluates candidate servers using normalized weights:
-  Score = 0.4 * Latency + 0.4 * Utilization + 0.2 * Load
+  Score = w_rtt * Norm(RTT) + w_util * Norm(Util) + w_load * Norm(Load)
+* **Dynamic CDN Policy Profiles:**
+  * `balanced` (Default): 40% Latency, 40% Utilization, 20% Load.
+  * `gaming`: 80% Latency, 10% Utilization, 10% Load (Low-latency optimization).
+  * `bulk_video`: 20% Latency, 70% Utilization, 10% Load (High-throughput optimization).
+* **OpenFlow TCAM Flow Table Lifecycle:** Ingress switch `s1` enforces `idle_timeout=15s` and `hard_timeout=60s` on all active NAT flows.
 * **Active SDN Probing:** Controller injects custom EtherType `0x88B5` probe frames every 1.0s to measure path RTT, smoothed via Exponential Moving Average (alpha = 0.5).
 * **Live Bandwidth Monitoring:** Polls OpenFlow port statistics (`OFPPortStatsRequest`) every 1.0s to calculate real-time trunk utilization.
 * **Out-of-Band Server Telemetry:** Server daemon broadcasts UDP heartbeats (`STATUS <id> <active_conns> <ts>`) to `10.0.0.254:9000` every 2.0s.
-* **In-Band Health Diagnostics:** Added `PING / PONG` verification on server port 8000.
-* **Atomic Route Export:** Writes live telemetry state atomically to `results/live_routes.json` via temporary file replacement (`.tmp` swap).
-* **Static Comparison Baseline (`CDN_MODE=static`):** Built-in CLI flag allowing side-by-side performance evaluation against static assignment (`c1->srv1`, `c2->srv2`, `c3->srv3`).
+* **Real-Time Terminal Monitor (`scripts/dashboard.py`):** Live-updating ASCII terminal dashboard rendering RTT meters, bandwidth utilization, server health, and profile weights.
+* **Concurrency Stress Tester (`scripts/stress_test.py`):** Multi-threaded VIP load generator measuring aggregate throughput and validating SHA-256 integrity.
 
 ---
 
@@ -82,48 +85,49 @@ Instead of requiring clients to know the physical IP addresses of edge replica s
 | Metric | Dynamic Smart Selection (Sprint 2) | Static Baseline (`CDN_MODE=static`) |
 | :--- | :--- | :--- |
 | **Server Selected** | **srv1** (Lowest Latency: 10 ms RTT) | **srv2** (Enforced: 40 ms RTT) |
-| **Throughput** | **39.26 Mbps** (10 MB in 3.28s) | **14.48 Mbps** (10 MB in 5.79s) |
+| **Single Client Throughput**| **39.26 Mbps** (10 MB in 3.28s) | **14.48 Mbps** (10 MB in 5.79s) |
+| **Multi-Stream Stress Test**| **70+ Mbps** aggregate bandwidth across 3 concurrent streams | Single-stream bound |
 | **Data Integrity** | `PASS` (SHA-256: 100% Match) | `PASS` (SHA-256: 100% Match) |
-| **Port Utilization Measured** | **37.2%** on `s1-eth1` | Link-bound on `s1-eth2` |
+| **TCAM Flow Expiry** | Flows purge automatically 15s after transfer | Requires manual deletion |
 
 ---
 
 ## 🚀 Execution & Quickstart Guide
 
-### Step 1: Start Ryu Controller (Terminal 1)
+### 1. Start Ryu Controller (Terminal 1)
 ```
 source ~/ryu-env/bin/activate
 cd ~/smaRT_CDN
 
-# Run in Dynamic Smart Selection Mode (Default):
+# Run in Default Balanced Mode:
 ryu-manager controller/cdn_controller.py
 
-# OR Run in Static Comparison Mode:
+# OR Run with Low-Latency Gaming Profile:
+# CDN_PROFILE=gaming ryu-manager controller/cdn_controller.py
+
+# OR Run with Static Comparison Baseline:
 # CDN_MODE=static ryu-manager controller/cdn_controller.py
 ```
 
-### Step 2: Launch Mininet Topology (Terminal 2)
+### 2. Launch Mininet Topology (Terminal 2)
 ```
 cd ~/smaRT_CDN
 sudo python3 topology/topo.py
 ```
 
-### Step 3: Run Client Transfer & Diagnostics (Inside Mininet CLI)
+### 3. Launch Live Telemetry Dashboard (Terminal 3)
 ```
-# 1. Download 10 MB payload via VIP Anycast
+cd ~/smaRT_CDN
+python3 scripts/dashboard.py
+```
+
+### 4. Run Client Downloads & Stress Tests (Inside Mininet CLI)
+```
+# Standard single download via Anycast VIP:
 mininet> c1 python3 app/client.py --id c1 --file test_10M.bin
 
-# 2. Test in-band server diagnostic
-mininet> c1 python3 -c "import socket; s=socket.socket(); s.connect(('10.0.0.100', 8000)); s.send(b'PING\n'); print(s.recv(1024).decode())"
-```
-
-### Step 4: Inspect Metrics & Logs (Terminal 3)
-```
-# View CSV transfer report:
-cat results/data/client-transfers.csv
-
-# View live JSON telemetry exported by controller:
-cat results/live_routes.json
+# Run 3 concurrent streaming workers against Anycast VIP:
+mininet> c1 python3 scripts/stress_test.py --concurrency 3 --file test_10M.bin
 ```
 
 ---
@@ -136,12 +140,15 @@ smaRT_CDN/
 ├── topology/
 │   └── topo.py                  # Mininet SDN topology (4 switches, 6 clients, 3 servers)
 ├── controller/
-│   ├── cdn_controller.py        # Ryu OpenFlow 1.3 VIP NAT & telemetry collector
-│   ├── selector.py              # 3-Factor Cost Selection algorithm
+│   ├── cdn_controller.py        # Ryu OpenFlow 1.3 VIP NAT, probes, TCAM flow aging
+│   ├── selector.py              # 3-Factor Cost Selection with Policy Profiles
 │   └── paths.py                 # OpenFlow flow rule installation helpers
 ├── app/
 │   ├── server.py                # 64 KB chunk server with UDP heartbeats & PING/PONG
 │   └── client.py                # VIP client with real-time SHA-256 verification
+├── scripts/
+│   ├── dashboard.py             # Live ASCII telemetry monitor
+│   └── stress_test.py           # Multi-threaded concurrent VIP stress tester
 ├── docs/
 │   ├── SPRINT_0.md              # Sprint 0 architecture & foundations log
 │   ├── SPRINT_1.md              # Sprint 1 baseline streaming log
@@ -158,6 +165,6 @@ smaRT_CDN/
 ---
 
 ## 👥 Course Team Responsibilities
-* **Developer 1 (Supreeth Prahlada):** Sprints 0, 1, 2 — Lead Architecture, VIP NAT, Telemetry Probing, 3-Factor Selection Engine. *(COMPLETED)*
+* **Developer 1 (Supreeth Prahlada):** Sprints 0, 1, 2 — Lead Architecture, VIP NAT, Telemetry Probing, 3-Factor Selection Engine, Profiles, Dashboard, Stress Tester. *(COMPLETED)*
 * **Developer 2 (Shyam Sooraj):** Sprints 3, 4 — 10s Server Failover, Byte-Offset Client Resume, Detour Switch s5 Congestion Rerouting, HTML Route Map. *(NEXT UP)*
 * **Tester (Shreyansh Tandon):** Test Scenarios (TC01 - TC18), Automated Verification Scripts, CI/CD Pipelines. *(NEXT UP)*
