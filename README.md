@@ -104,6 +104,13 @@ mininet> c1 python3 app/client.py --id c1 --file test_10M.bin
 mininet> c1 python3 scripts/stress_test.py --concurrency 3 --file test_10M.bin
 ```
 ---
+## Automated Test Suite (Sprints 1–2)
+Install `pytest` separately (it is not currently listed in `pyproject.toml`) and run the fast tests from the repository root:
+```
+pytest -m "not integration"
+```
+This unit suite does not require Mininet or root. Controller integration cases require Ryu; topology/system scenarios additionally require Mininet, Open vSwitch, and a safe privileged test environment. Skipped tests are not acceptance passes. See [`docs/test_plan.md`](docs/test_plan.md) for requirement traceability, real run counts, known failures, and open questions.
+---
 ## 📁 Repository Structure
 ```text
 smaRT_CDN/
