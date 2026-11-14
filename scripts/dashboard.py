@@ -135,7 +135,7 @@ def render_dashboard():
                 elif match_flag == 'false':
                     badge = f"{RED}FAILED{RESET}"
                 else:
-                    badge = f"{YELLOW}UNVERIFIED{RESET}"
+                    badge = f"{RED}FAILED{RESET}" if size_bytes == 0 else f"{YELLOW}UNVERIFIED{RESET}"
                 print(f"   • {c_id:<10} | Payload: {size_mb:4.1f} MB | Time: {dur:4.2f}s | Speed: {BOLD}{mbps:5.2f} Mbps{RESET} | {badge}")
         else:
             print(f"   {DIM}No transfers logged yet.{RESET}")
