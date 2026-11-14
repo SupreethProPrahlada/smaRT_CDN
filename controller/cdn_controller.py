@@ -1,166 +1,325 @@
+"""
+Smart CDN - OpenFlow 1.3 Ryu Controller (Sprints 1 & 2)
+- Ingress switch s1 L4 bidirectional Anycast VIP NAT (10.0.0.100:8000)
+- Active EtherType 0x88B5 RTT latency probing with EMA smoothing (alpha=0.5)
+- OpenFlow port stats polling for trunk link utilization
+- UDP status telemetry listener on port 9000
+- 3-Factor Cost Selection with Dynamic Policy Profiles (gaming, bulk_video, balanced)
+- OpenFlow TCAM flow aging with idle_timeout=15s
+- Atomic live telemetry export to results/live_routes.json
+"""
+
+import json
+import os
+import time
+import socket
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
-from ryu.ofproto import ofproto_v1_3
-from ryu.lib.packet import packet, ethernet, arp, ipv4, tcp, udp, ether_types
+from ryu.ofproto import ofproto_v1_3, ether
+from ryu.lib.packet import packet, ethernet, arp, ipv4, tcp
 from ryu.lib import hub
-import sys, os, json, time, struct
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from config.settings import (
-    VIP_IP, VIP_MAC, SERVERS, CLIENT_IPS, CLIENT_MACS, CONTENT_PORT,
-    HB_LISTEN_IP, HB_PORT, PROBE_ETHERTYPE, PROBE_INTERVAL, EMA_ALPHA,
-    STATS_INTERVAL, LOG_INTERVAL, DEFAULT_CDN_MODE, LIVE_ROUTES_JSON
+    VIP, VIP_MAC, SERVER_POOL, SWITCH_PORTS,
+    TRUNK_CAPACITY, CONTROLLER_PORT, TELEMETRY_PORT,
+    ETHERTYPE_PROBE, PROBE_INTERVAL_SEC, STATS_INTERVAL_SEC,
+    RESULTS_DIR, LIVE_ROUTES_JSON
 )
-from controller.paths import DPID_S1, S1_TRUNK_PORTS, SERVER_SWITCH_PORTS, add_flow
 from controller.selector import ServerSelector
 
 class SmartCDNController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        super(SmartCDNController, self).__init__(*args, **kwargs)
+        self.selector = ServerSelector()
         self.datapaths = {}
-        self.selector = ServerSelector(cdn_mode=DEFAULT_CDN_MODE)
+
+        # Telemetry State
         self.server_telemetry = {
-            'srv1': {'status': 'UP', 'rtt_ms': 10.0, 'utilization': 0.0, 'active_conns': 0, 'capacity': 100},
-            'srv2': {'status': 'UP', 'rtt_ms': 40.0, 'utilization': 0.0, 'active_conns': 0, 'capacity': 50},
-            'srv3': {'status': 'UP', 'rtt_ms': 100.0, 'utilization': 0.0, 'active_conns': 0, 'capacity': 10},
+            srv_id: {
+                'ip': info['ip'],
+                'mac': info['mac'],
+                'trunk_port': info['trunk_port'],
+                'status': 'HEALTHY',
+                'rtt_ms': 10.0 if srv_id == 'srv1' else (40.0 if srv_id == 'srv2' else 100.0),
+                'utilization': 0.0,
+                'active_conns': 0,
+                'last_seen': time.time(),
+                'bytes_prev': 0,
+                'time_prev': time.time()
+            }
+            for srv_id, info in SERVER_POOL.items()
         }
-        self.port_stats_history = {}
-        self.last_log_time = time.time()
-        hub.spawn(self._monitor_loop)
-        hub.spawn(self._probe_loop)
+
+        # Probe Sequence tracking
+        self.probe_seq = 0
+        self.probe_times = {}
+
+        # Start background green threads
+        self.probe_thread = hub.spawn(self.probe_loop)
+        self.stats_thread = hub.spawn(self.port_stats_loop)
+        self.udp_thread = hub.spawn(self.udp_telemetry_loop)
+        self.status_thread = hub.spawn(self.status_console_loop)
+
+        self.logger.info(f"=== smaRT_CDN Controller Initialized ===")
+        self.logger.info(f"Mode: {self.selector.cdn_mode.upper()} | Profile: {self.selector.profile_name.upper()} ({self.selector.profile_desc})")
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
-        dp = ev.msg.datapath
-        dpid = dp.id
-        self.datapaths[dpid] = dp
-        parser, ofproto = dp.ofproto_parser, dp.ofproto
+        datapath = ev.msg.datapath
+        dpid = datapath.id
+        self.datapaths[dpid] = datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
 
-        add_flow(dp, priority=0, match=parser.OFPMatch(), actions=[parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)])
+        # Table-miss flow entry: send unknown packets to controller
+        match = parser.OFPMatch()
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+        self.add_flow(datapath, 0, match, actions, idle_timeout=0)
+        self.logger.info(f"[Switch s{dpid}] Connected & table-miss flow installed")
 
-        if dpid in SERVER_SWITCH_PORTS:
-            cfg = SERVER_SWITCH_PORTS[dpid]
-            add_flow(dp, priority=200, match=parser.OFPMatch(eth_type=PROBE_ETHERTYPE), actions=[parser.OFPActionOutput(cfg['s1_trunk_port'])])
-            add_flow(dp, priority=10, match=parser.OFPMatch(in_port=cfg['server_port']), actions=[parser.OFPActionOutput(cfg['s1_trunk_port'])])
-            add_flow(dp, priority=10, match=parser.OFPMatch(in_port=cfg['s1_trunk_port']), actions=[parser.OFPActionOutput(cfg['server_port'])])
-
-        if dpid == DPID_S1:
-            add_flow(dp, priority=200, match=parser.OFPMatch(eth_type=PROBE_ETHERTYPE), actions=[parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)])
-
-    def _probe_loop(self):
-        hub.sleep(2.0)
-        while True:
-            if DPID_S1 in self.datapaths:
-                dp = self.datapaths[DPID_S1]
-                parser = dp.ofproto_parser
-                now = time.time()
-                for srv_id, trunk in S1_TRUNK_PORTS.items():
-                    payload = struct.pack('!d8s', now, srv_id.ljust(8).encode('ascii'))
-                    pkt = packet.Packet()
-                    pkt.add_protocol(ethernet.ethernet(ethertype=PROBE_ETHERTYPE, dst='ff:ff:ff:ff:ff:ff', src=VIP_MAC))
-                    pkt.add_protocol(payload)
-                    pkt.serialize()
-                    dp.send_msg(parser.OFPPacketOut(datapath=dp, buffer_id=dp.ofproto.OFP_NO_BUFFER, in_port=dp.ofproto.OFPP_CONTROLLER, actions=[parser.OFPActionOutput(trunk)], data=pkt.data))
-            hub.sleep(PROBE_INTERVAL)
-
-    def _monitor_loop(self):
-        while True:
-            for dp in list(self.datapaths.values()):
-                dp.send_msg(dp.ofproto_parser.OFPPortStatsRequest(dp, 0, dp.ofproto.OFPP_ANY))
-            self.export_live_routes()
-            if time.time() - self.last_log_time >= LOG_INTERVAL:
-                self.log_controller_status()
-                self.last_log_time = time.time()
-            hub.sleep(STATS_INTERVAL)
-
-    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
-    def port_stats_reply_handler(self, ev):
-        dpid = ev.msg.datapath.id
-        now = time.time()
-        if dpid == DPID_S1:
-            for stat in ev.msg.body:
-                for srv_id, trunk in S1_TRUNK_PORTS.items():
-                    if stat.port_no == trunk:
-                        key = (dpid, stat.port_no)
-                        tot_bytes = stat.tx_bytes + stat.rx_bytes
-                        if key in self.port_stats_history:
-                            pb, pt = self.port_stats_history[key]
-                            dt = now - pt
-                            if dt > 0.1:
-                                mbps = ((tot_bytes - pb) * 8.0) / (dt * 1_000_000.0)
-                                self.server_telemetry[srv_id]['utilization'] = round(min(1.0, max(0.0, mbps / self.server_telemetry[srv_id]['capacity'])), 3)
-                        self.port_stats_history[key] = (tot_bytes, now)
+    def add_flow(self, datapath, priority, match, actions, idle_timeout=15, hard_timeout=0, buffer_id=None):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        if buffer_id:
+            mod = parser.OFPFlowMod(
+                datapath=datapath, buffer_id=buffer_id, priority=priority,
+                match=match, instructions=inst,
+                idle_timeout=idle_timeout, hard_timeout=hard_timeout
+            )
+        else:
+            mod = parser.OFPFlowMod(
+                datapath=datapath, priority=priority, match=match,
+                instructions=inst, idle_timeout=idle_timeout, hard_timeout=hard_timeout
+            )
+        datapath.send_msg(mod)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         msg = ev.msg
-        dp, dpid, in_port = msg.datapath, msg.datapath.id, msg.match['in_port']
+        dp = msg.datapath
+        dpid = dp.id
+        in_port = msg.match['in_port']
         pkt = packet.Packet(msg.data)
-        pkt_eth = pkt.get_protocol(ethernet.ethernet)
-        if not pkt_eth: return
+        eth = pkt.get_protocols(ethernet.ethernet)[0]
 
-        if pkt_eth.ethertype == PROBE_ETHERTYPE:
+        # 1. Custom Probe Frame (EtherType 0x88B5) Response
+        if eth.ethertype == ETHERTYPE_PROBE:
+            self.handle_probe_reply(pkt)
+            return
+
+        # 2. Ingress Switch s1 Routing & NAT
+        if dpid == 1:
+            # Handle ARP for Anycast VIP (10.0.0.100)
+            arp_pkt = pkt.get_protocol(arp.arp)
+            if arp_pkt and arp_pkt.dst_ip == VIP:
+                self.handle_vip_arp(dp, in_port, eth, arp_pkt)
+                return
+
+            # Handle TCP Traffic destined to VIP (10.0.0.100:8000)
+            ip_pkt = pkt.get_protocol(ipv4.ipv4)
+            tcp_pkt = pkt.get_protocol(tcp.tcp)
+            if ip_pkt and tcp_pkt and ip_pkt.dst == VIP and tcp_pkt.dst_port == CONTROLLER_PORT:
+                self.install_vip_nat_rules(dp, in_port, ip_pkt, tcp_pkt, msg)
+                return
+
+        # Default L2 flood for unhandled discovery traffic
+        parser = dp.ofproto_parser
+        actions = [parser.OFPActionOutput(dp.ofproto.OFPP_FLOOD)]
+        data = msg.data if msg.buffer_id == dp.ofproto.OFP_NO_BUFFER else None
+        out = parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id, in_port=in_port, actions=actions, data=data)
+        dp.send_msg(out)
+
+    def handle_vip_arp(self, dp, in_port, eth, arp_pkt):
+        parser = dp.ofproto_parser
+        reply = packet.Packet()
+        reply.add_protocol(ethernet.ethernet(ethertype=ether.ETH_TYPE_ARP, dst=eth.src, src=VIP_MAC))
+        reply.add_protocol(arp.arp(
+            opcode=arp.ARP_REPLY, src_mac=VIP_MAC, src_ip=VIP,
+            dst_mac=arp_pkt.src_mac, dst_ip=arp_pkt.src_ip
+        ))
+        reply.serialize()
+        actions = [parser.OFPActionOutput(in_port)]
+        out = parser.OFPPacketOut(datapath=dp, buffer_id=dp.ofproto.OFP_NO_BUFFER, in_port=dp.ofproto.OFPP_CONTROLLER, actions=actions, data=reply.data)
+        dp.send_msg(out)
+
+    def install_vip_nat_rules(self, dp, in_port, ip_pkt, tcp_pkt, msg):
+        client_ip = ip_pkt.src
+        client_mac = msg.match.get('eth_src', '00:00:00:00:00:01')
+        client_port = tcp_pkt.src_port
+
+        # Resolve client ID (e.g. 10.0.0.1 -> c1)
+        last_octet = client_ip.split('.')[-1]
+        client_id = f"c{last_octet}"
+
+        # Choose best server using selector
+        srv_id = self.selector.select_best_server(client_id, self.server_telemetry)
+        srv = SERVER_POOL[srv_id]
+        trunk = srv['trunk_port']
+
+        self.logger.info(f"[Route Decision] Client {client_id} ({client_ip}:{client_port}) -> {srv_id} ({srv['ip']}:8000) via port {trunk}")
+
+        parser = dp.ofproto_parser
+        ofproto = dp.ofproto
+
+        # Forward Flow: Client -> VIP translated to Server IP/MAC (idle_timeout=15s)
+        match_fwd = parser.OFPMatch(
+            in_port=in_port, eth_type=0x0800, ip_proto=6,
+            ipv4_src=client_ip, ipv4_dst=VIP,
+            tcp_src=client_port, tcp_dst=CONTROLLER_PORT
+        )
+        actions_fwd = [
+            parser.OFPActionSetField(ipv4_dst=srv['ip']),
+            parser.OFPActionSetField(eth_dst=srv['mac']),
+            parser.OFPActionOutput(trunk)
+        ]
+        self.add_flow(dp, 100, match_fwd, actions_fwd, idle_timeout=15, hard_timeout=60)
+
+        # Reverse Flow: Server -> Client translated to VIP IP/MAC (idle_timeout=15s)
+        match_rev = parser.OFPMatch(
+            in_port=trunk, eth_type=0x0800, ip_proto=6,
+            ipv4_src=srv['ip'], ipv4_dst=client_ip,
+            tcp_src=CONTROLLER_PORT, tcp_dst=client_port
+        )
+        actions_rev = [
+            parser.OFPActionSetField(ipv4_src=VIP),
+            parser.OFPActionSetField(eth_src=VIP_MAC),
+            parser.OFPActionOutput(in_port)
+        ]
+        self.add_flow(dp, 100, match_rev, actions_rev, idle_timeout=15, hard_timeout=60)
+
+        # Forward current packet out
+        actions_out = [
+            parser.OFPActionSetField(ipv4_dst=srv['ip']),
+            parser.OFPActionSetField(eth_dst=srv['mac']),
+            parser.OFPActionOutput(trunk)
+        ]
+        data = msg.data if msg.buffer_id == ofproto.OFP_NO_BUFFER else None
+        out = parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id, in_port=in_port, actions=actions_out, data=data)
+        dp.send_msg(out)
+
+    def probe_loop(self):
+        while True:
+            dp = self.datapaths.get(1)
+            if dp:
+                parser = dp.ofproto_parser
+                for srv_id, info in SERVER_POOL.items():
+                    self.probe_seq += 1
+                    seq = self.probe_seq
+                    self.probe_times[seq] = (srv_id, time.time())
+
+                    pkt = packet.Packet()
+                    pkt.add_protocol(ethernet.ethernet(
+                        ethertype=ETHERTYPE_PROBE,
+                        src=VIP_MAC,
+                        dst=info['mac']
+                    ))
+                    payload = f"PROBE:{seq}:{srv_id}".encode()
+                    pkt.data = payload
+                    pkt.serialize()
+
+                    actions = [parser.OFPActionOutput(info['trunk_port'])]
+                    out = parser.OFPPacketOut(
+                        datapath=dp, buffer_id=dp.ofproto.OFP_NO_BUFFER,
+                        in_port=dp.ofproto.OFPP_CONTROLLER, actions=actions, data=pkt.data
+                    )
+                    dp.send_msg(out)
+            hub.sleep(PROBE_INTERVAL_SEC)
+
+    def handle_probe_reply(self, pkt):
+        raw_data = pkt.protocols[-1]
+        if isinstance(raw_data, bytes):
             try:
-                t_sent, s_b = struct.unpack('!d8s', msg.data[14:30])
-                s_id = s_b.decode().strip()
-                if s_id in self.server_telemetry:
-                    rtt = (time.time() - t_sent) * 1000.0
-                    old = self.server_telemetry[s_id]['rtt_ms']
-                    self.server_telemetry[s_id]['rtt_ms'] = round((EMA_ALPHA * rtt) + ((1.0 - EMA_ALPHA) * old), 2)
-            except Exception: pass
-            return
+                parts = raw_data.decode().split(':')
+                if parts[0] in ['PROBE', 'REPLY']:
+                    seq = int(parts[1])
+                    if seq in self.probe_times:
+                        srv_id, send_t = self.probe_times.pop(seq)
+                        rtt = (time.time() - send_t) * 1000.0
+                        prev_rtt = self.server_telemetry[srv_id]['rtt_ms']
+                        self.server_telemetry[srv_id]['rtt_ms'] = (0.5 * prev_rtt) + (0.5 * rtt)
+            except Exception:
+                pass
 
-        pkt_arp = pkt.get_protocol(arp.arp)
-        if pkt_arp and pkt_arp.opcode == arp.ARP_REQUEST:
-            t_ip, t_mac = pkt_arp.dst_ip, None
-            if t_ip == VIP_IP: t_mac = VIP_MAC
-            elif t_ip == HB_LISTEN_IP: t_mac = "00:00:00:00:02:54"
-            elif t_ip in [s['ip'] for s in SERVERS.values()]: t_mac = next(s['mac'] for s in SERVERS.values() if s['ip'] == t_ip)
-            elif t_ip in CLIENT_IPS.values(): t_mac = next(mac for cid, mac in CLIENT_MACS.items() if CLIENT_IPS[cid] == t_ip)
-            if t_mac:
-                r = packet.Packet()
-                r.add_protocol(ethernet.ethernet(ethertype=ether_types.ETH_TYPE_ARP, dst=pkt_eth.src, src=t_mac))
-                r.add_protocol(arp.arp(opcode=arp.ARP_REPLY, src_mac=t_mac, src_ip=t_ip, dst_mac=pkt_arp.src_mac, dst_ip=pkt_arp.src_ip))
-                r.serialize()
-                dp.send_msg(dp.ofproto_parser.OFPPacketOut(datapath=dp, buffer_id=dp.ofproto.OFP_NO_BUFFER, in_port=dp.ofproto.OFPP_CONTROLLER, actions=[dp.ofproto_parser.OFPActionOutput(in_port)], data=r.data))
-            return
+    def port_stats_loop(self):
+        while True:
+            dp = self.datapaths.get(1)
+            if dp:
+                parser = dp.ofproto_parser
+                req = parser.OFPPortStatsRequest(dp, 0, dp.ofproto.OFPP_ANY)
+                dp.send_msg(req)
+            hub.sleep(STATS_INTERVAL_SEC)
 
-        pkt_ip, pkt_udp = pkt.get_protocol(ipv4.ipv4), pkt.get_protocol(udp.udp)
-        if pkt_ip and pkt_udp and pkt_udp.dst_port == HB_PORT:
+    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
+    def port_stats_reply_handler(self, ev):
+        if ev.msg.datapath.id != 1:
+            return
+        now = time.time()
+        for stat in ev.msg.body:
+            port_no = stat.port_no
+            for srv_id, info in SERVER_POOL.items():
+                if info['trunk_port'] == port_no:
+                    t_entry = self.server_telemetry[srv_id]
+                    dt = now - t_entry['time_prev']
+                    db = stat.tx_bytes - t_entry['bytes_prev']
+                    if dt > 0 and t_entry['bytes_prev'] > 0:
+                        bps = (db * 8.0) / dt
+                        capacity_bps = TRUNK_CAPACITY.get(f"s1-s{info['trunk_port']+1}", 100_000_000)
+                        t_entry['utilization'] = min(bps / capacity_bps, 1.0)
+                    t_entry['bytes_prev'] = stat.tx_bytes
+                    t_entry['time_prev'] = now
+
+    def udp_telemetry_loop(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind(('0.0.0.0', TELEMETRY_PORT))
+        sock.setblocking(False)
+        while True:
             try:
-                p = msg.data[14 + pkt_ip.header_length*4 + 8:].decode(errors='ignore').strip().split()
-                if len(p) >= 3 and p[0] == "STATUS" and p[1] in self.server_telemetry:
-                    self.server_telemetry[p[1]]['active_conns'] = int(p[2])
-                    self.server_telemetry[p[1]]['status'] = 'UP'
-            except Exception: pass
-            return
-
-        pkt_tcp = pkt.get_protocol(tcp.tcp)
-        if dpid == DPID_S1 and pkt_ip and pkt_tcp and pkt_ip.dst == VIP_IP and pkt_tcp.dst_port == CONTENT_PORT:
-            cid = next((k for k, v in CLIENT_IPS.items() if v == pkt_ip.src), "c1")
-            srv = self.selector.select_server(cid, self.server_telemetry)
-            trunk = S1_TRUNK_PORTS[srv['id']]
-            parser = dp.ofproto_parser
-            self.logger.info(f"[Route Decision] Mode={self.selector.cdn_mode} | Client {pkt_ip.src} -> {srv['id']} (RTT={self.server_telemetry[srv['id']]['rtt_ms']}ms Util={self.server_telemetry[srv['id']]['utilization']*100:.1f}%)")
-
-            add_flow(dp, priority=100, match=parser.OFPMatch(in_port=in_port, eth_type=0x0800, ip_proto=6, ipv4_src=pkt_ip.src, ipv4_dst=VIP_IP, tcp_dst=CONTENT_PORT), actions=[parser.OFPActionSetField(ipv4_dst=srv['ip']), parser.OFPActionSetField(eth_dst=srv['mac']), parser.OFPActionOutput(trunk)], idle_timeout=60)
-            add_flow(dp, priority=100, match=parser.OFPMatch(in_port=trunk, eth_type=0x0800, ip_proto=6, ipv4_src=srv['ip'], ipv4_dst=pkt_ip.src, tcp_src=CONTENT_PORT), actions=[parser.OFPActionSetField(ipv4_src=VIP_IP), parser.OFPActionSetField(eth_src=VIP_MAC), parser.OFPActionOutput(in_port)], idle_timeout=60)
-
-            dp.send_msg(parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id, in_port=in_port, actions=[parser.OFPActionSetField(ipv4_dst=srv['ip']), parser.OFPActionSetField(eth_dst=srv['mac']), parser.OFPActionOutput(trunk)], data=msg.data if msg.buffer_id == dp.ofproto.OFP_NO_BUFFER else None))
+                data, _ = sock.recvfrom(1024)
+                parts = data.decode().strip().split()
+                if len(parts) >= 4 and parts[0] == 'STATUS':
+                    srv_id = parts[1]
+                    conns = int(parts[2])
+                    if srv_id in self.server_telemetry:
+                        self.server_telemetry[srv_id]['active_conns'] = conns
+                        self.server_telemetry[srv_id]['last_seen'] = time.time()
+            except BlockingIOError:
+                pass
+            except Exception:
+                pass
+            hub.sleep(0.5)
 
     def export_live_routes(self):
         try:
             os.makedirs(os.path.dirname(LIVE_ROUTES_JSON), exist_ok=True)
-            with open(LIVE_ROUTES_JSON, 'w') as f:
-                json.dump({'timestamp': time.time(), 'cdn_mode': self.selector.cdn_mode, 'servers': self.server_telemetry}, f, indent=2)
-        except Exception: pass
+            temp_path = LIVE_ROUTES_JSON + '.tmp'
+            snapshot = {
+                'timestamp': time.time(),
+                'cdn_mode': self.selector.cdn_mode,
+                'profile': self.selector.profile_name,
+                'profile_desc': self.selector.profile_desc,
+                'weights': {
+                    'latency': self.selector.w_rtt,
+                    'utilization': self.selector.w_util,
+                    'load': self.selector.w_load
+                },
+                'servers': self.server_telemetry
+            }
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(snapshot, f, indent=2)
+            os.replace(temp_path, LIVE_ROUTES_JSON)
+        except Exception:
+            pass
 
-    def log_controller_status(self):
-        self.logger.info("-------------------- Smart CDN State (5s Log) --------------------")
-        self.logger.info(f"Mode: {self.selector.cdn_mode.upper()}")
-        for s, d in self.server_telemetry.items():
-            self.logger.info(f"  [{s}] Status: {d['status']} | RTT: {d['rtt_ms']:6.2f} ms | Util: {d['utilization']*100:5.1f}% | Conns: {d['active_conns']}")
-        self.logger.info("-----------------------------------------------------------------")
+    def status_console_loop(self):
+        while True:
+            hub.sleep(5)
+            self.export_live_routes()
+            self.logger.info("-------------------- Smart CDN Status (5s Log) --------------------")
+            self.logger.info(f"Mode: {self.selector.cdn_mode.upper()} | Profile: {self.selector.profile_name.upper()} ({self.selector.profile_desc})")
+            for s, d in self.server_telemetry.items():
+                self.logger.info(f"[{s}] Status: {d['status']} | RTT: {d['rtt_ms']:.2f} ms | Util: {d['utilization']*100:5.1f}% | Conns: {d['active_conns']}")
+            self.logger.info("-------------------------------------------------------------------")
