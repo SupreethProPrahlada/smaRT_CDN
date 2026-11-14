@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
 smaRT_CDN Multi-Client Concurrency Stress Tester (Sprint 2)
-Spawns N concurrent VIP streaming workers against 10.0.0.100:8000,
-measures aggregate throughput, validates SHA-256 hashes, and logs to CSV.
 """
-
-import os
 import sys
+import os
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import time
 import socket
 import hashlib
 import argparse
 import threading
 from datetime import datetime
-from config.settings import VIP, CONTROLLER_PORT, CHUNK_SIZE, CLIENT_CSV
+from config.settings import VIP_IP, CONTENT_PORT, CHUNK_SIZE, CLIENT_TRANSFERS_CSV
 
 results_lock = threading.Lock()
 worker_results = []
@@ -30,20 +32,26 @@ def download_worker(worker_id: int, filename: str, vip: str, port: int):
         s.settimeout(10.0)
         s.connect((vip, port))
 
-        # Send GET request
-        s.sendall(f"GET {filename}\n".encode('utf-8'))
+        # Send GET request with starting offset 0
+        s.sendall(f"GET {filename} 0\n".encode('utf-8'))
 
         # Read header: OK <total> <remain>\n
-        header_data = b""
-        while b"\n" not in header_data:
-            chunk = s.recv(1)
-            if not chunk:
+        hdr = b""
+        while b"\n" not in hdr:
+            c = s.recv(1024)
+            if not c:
                 break
-            header_data += chunk
+            hdr += c
 
-        line = header_data.decode('utf-8').strip()
+        line = hdr.split(b"\n")[0].decode()
         if not line.startswith("OK"):
-            raise Exception(f"Server rejected request: {line}")
+            raise Exception(f"Server rejected: {line}")
+
+        # Any extra data received with the header
+        extra = hdr[len(line) + 1:]
+        if extra:
+            total_bytes += len(extra)
+            sha256.update(extra)
 
         # Stream binary payload
         while True:
@@ -76,9 +84,9 @@ def download_worker(worker_id: int, filename: str, vip: str, port: int):
         worker_results.append(result)
 
 def log_to_csv(filename: str, concurrency: int, agg_mbps: float):
-    os.makedirs(os.path.dirname(CLIENT_CSV), exist_ok=True)
-    write_header = not os.path.exists(CLIENT_CSV)
-    with open(CLIENT_CSV, 'a', encoding='utf-8') as f:
+    os.makedirs(os.path.dirname(CLIENT_TRANSFERS_CSV), exist_ok=True)
+    write_header = not os.path.exists(CLIENT_TRANSFERS_CSV)
+    with open(CLIENT_TRANSFERS_CSV, 'a', encoding='utf-8') as f:
         if write_header:
             f.write("timestamp,client_id,file_name,bytes_received,duration_sec,throughput_mbps,sha256,tag\n")
         ts = datetime.utcnow().isoformat() + "Z"
@@ -89,8 +97,8 @@ def main():
     parser = argparse.ArgumentParser(description="CDN Concurrency Stress Tester")
     parser.add_argument("--concurrency", type=int, default=3, help="Number of concurrent client streams (default: 3)")
     parser.add_argument("--file", type=str, default="test_10M.bin", help="Filename to request (default: test_10M.bin)")
-    parser.add_argument("--vip", type=str, default=VIP, help="Target Anycast VIP")
-    parser.add_argument("--port", type=int, default=CONTROLLER_PORT, help="Target Port")
+    parser.add_argument("--vip", type=str, default=VIP_IP, help="Target Anycast VIP")
+    parser.add_argument("--port", type=int, default=CONTENT_PORT, help="Target Port")
     args = parser.parse_args()
 
     print("==================================================================")
@@ -133,7 +141,7 @@ def main():
     print("==================================================================")
 
     log_to_csv(args.file, args.concurrency, agg_mbps)
-    print(f"Results appended to: {CLIENT_CSV}")
+    print(f"Results appended to: {CLIENT_TRANSFERS_CSV}")
 
 if __name__ == '__main__':
     main()
