@@ -76,18 +76,24 @@ def render_dashboard():
         servers = data.get('servers', {})
         t_str = datetime.fromtimestamp(data.get('timestamp', time.time())).strftime('%H:%M:%S')
 
-        best_srv = 'srv1'
+        best_srv = None
         lowest_rtt = 999.0
-        for sid, sdata in servers.items():
-            rtt = sdata.get('rtt_ms', 999.0)
+        healthy_servers = {
+            sid: sdata for sid, sdata in servers.items()
+            if sdata.get('status', 'UP') in ('UP', 'HEALTHY')
+        }
+        candidates = healthy_servers or servers
+        for sid, sdata in candidates.items():
+            rtt = safe_float(sdata.get('rtt_ms', 999.0), 999.0)
             if rtt < lowest_rtt:
                 lowest_rtt = rtt
                 best_srv = sid
+        best_label = f"{best_srv.upper()} ({lowest_rtt:.1f} ms)" if best_srv else "NONE"
 
         print(f"{BOLD}{CYAN}==============================================================================={RESET}")
         print(f"{BOLD}{CYAN}             smaRT_CDN TELEMETRY & NETWORK OPERATIONS CENTER (NOC)             {RESET}")
         print(f"{BOLD}{CYAN}==============================================================================={RESET}")
-        print(f" {BOLD}System Time:{RESET} {t_str}   |   {BOLD}Mode:{RESET} {GREEN if mode == 'DYNAMIC' else YELLOW}{mode}{RESET}   |   {BOLD}Lowest RTT Replica:{RESET} {GREEN}{best_srv.upper()} ({lowest_rtt:.1f} ms){RESET}")
+        print(f" {BOLD}System Time:{RESET} {t_str}   |   {BOLD}Mode:{RESET} {GREEN if mode == 'DYNAMIC' else YELLOW}{mode}{RESET}   |   {BOLD}Lowest RTT Replica:{RESET} {GREEN if healthy_servers else RED}{best_label}{RESET}")
         print("-------------------------------------------------------------------------------")
         print(f" {BOLD}{'SERVER':<7} {'IP ADDRESS':<13} {'STATUS':<9} {'RTT LATENCY':<24} {'UTILIZATION':<17} {'TRUNK LINK'}{RESET}")
         print("-------------------------------------------------------------------------------")
@@ -110,16 +116,27 @@ def render_dashboard():
             print(f"{marker}{srv_id:<6} {ip:<13} {status:<18} {rtt_bar:<33} {util_bar:<26} {DIM}{link}{RESET}")
 
         print("-------------------------------------------------------------------------------")
-        print(f"{BOLD} Recent Verified Downloads (from {CSV_FILE}):{RESET}")
+        print(f"{BOLD} Recent Client Transfers (from {CSV_FILE}):{RESET}")
         transfers = get_recent_transfers()
         if transfers:
             for t in transfers:
                 c_id = t.get('client_id', 'client')
-                size_bytes = safe_float(t.get('size_bytes') or t.get('bytes_received') or t.get('bytes') or 10485760)
+                raw_size = next(
+                    (t[k] for k in ('bytes_received', 'size_bytes', 'bytes') if t.get(k) not in (None, '')),
+                    0,
+                )
+                size_bytes = safe_float(raw_size, 0.0)
                 size_mb = size_bytes / (1024 * 1024)
                 mbps = safe_float(t.get('throughput_mbps') or t.get('mbps') or 0.0)
                 dur = safe_float(t.get('duration_s') or t.get('duration_sec') or t.get('duration') or 0.0)
-                print(f"   • {c_id:<10} | Payload: {size_mb:4.1f} MB | Time: {dur:4.2f}s | Speed: {BOLD}{mbps:5.2f} Mbps{RESET} | {GREEN}Logged Transfer{RESET}")
+                match_flag = str(t.get('sha256_match', '')).strip().lower()
+                if match_flag == 'true':
+                    badge = f"{GREEN}VERIFIED{RESET}"
+                elif match_flag == 'false':
+                    badge = f"{RED}FAILED{RESET}"
+                else:
+                    badge = f"{YELLOW}UNVERIFIED{RESET}"
+                print(f"   • {c_id:<10} | Payload: {size_mb:4.1f} MB | Time: {dur:4.2f}s | Speed: {BOLD}{mbps:5.2f} Mbps{RESET} | {badge}")
         else:
             print(f"   {DIM}No transfers logged yet.{RESET}")
 
