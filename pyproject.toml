@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "TCP content delivery over a Mininet SDN topology"
 requires-python = "==3.9.*"
 dependencies = [
+    "eventlet<0.34",
     "matplotlib",
     "mininet @ git+https://github.com/mininet/mininet.git@d7f399d7a1200b602bd6a95ae88bae1009664d4a",
     "pbr",
@@ -16,4 +17,7 @@ dependencies = [
 package = false
 no-build-isolation-package = ["ryu"]
 
-dev-dependencies = ["pytest>=7.0"]
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+]
