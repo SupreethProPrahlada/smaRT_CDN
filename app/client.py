@@ -1,63 +1,161 @@
-import socket, hashlib, time, os, sys, argparse, csv
+import argparse
+import csv
+import hashlib
+import os
+import socket
+import sys
+import time
 from datetime import datetime
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config.settings import VIP_IP, CONTENT_PORT, CHUNK_SIZE, CLIENT_DOWNLOAD_DIR, CLIENT_TRANSFERS_CSV
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from config.settings import (
+    VIP_IP,
+    CONTENT_PORT,
+    CHUNK_SIZE,
+    CLIENT_DOWNLOAD_DIR,
+    CLIENT_TRANSFERS_CSV,
+)
+
 
 def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CONTENT_PORT):
     os.makedirs(CLIENT_DOWNLOAD_DIR, exist_ok=True)
     out_path = os.path.join(CLIENT_DOWNLOAD_DIR, f"{client_id}_{filename}")
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
     start = time.time()
-    s.connect((target_ip, port))
-    s.sendall(f"GET {filename} 0\n".encode())
-
-    hdr = b""
-    while b"\n" not in hdr:
-        c = s.recv(1024)
-        if not c: break
-        hdr += c
-    ttfb = (time.time() - start) * 1000.0
-    line = hdr.split(b"\n")[0].decode()
-    remain = int(line.split()[2])
-    data = hdr[len(line)+1:]
-
-    hasher = hashlib.sha256()
+    ttfb = 0.0
     received = 0
-    with open(out_path, 'wb') as f:
-        if data:
-            f.write(data)
-            hasher.update(data)
-            received += len(data)
-        while received < remain:
-            b = s.recv(CHUNK_SIZE)
-            if not b: break
-            f.write(b)
-            hasher.update(b)
-            received += len(b)
+    duration = 0.0
+    mbps = 0.0
+    hash_match = None
+    status = "FAIL"
+    error_message = None
+    hasher = hashlib.sha256()
 
-    dur = time.time() - start
-        # Validate completeness (tester Issue 1 fix)
-        if received != remain:
-            match = False
-            print(f"[WARN] Incomplete transfer: got {received} of {remain} bytes")
-    mbps = (received * 8) / (dur * 1_000_000)
-    match = (hasher.hexdigest().lower() == expected_hash.lower()) if expected_hash else True
-    print(f"[{client_id}] Download complete: {received} bytes in {dur:.2f}s ({mbps:.2f} Mbps) | {'PASS' if match else 'FAIL'}")
+    try:
+        with socket.create_connection((target_ip, port), timeout=15) as sock:
+            sock.sendall(f"GET {filename} 0\n".encode())
+
+            header_buffer = b""
+            while b"\n" not in header_buffer:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    raise ConnectionError("server closed before sending a response")
+                header_buffer += chunk
+
+            ttfb = (time.time() - start) * 1000.0
+            header, _, data = header_buffer.partition(b"\n")
+            parts = header.decode(errors="replace").split()
+
+            if not parts or parts[0] != "OK":
+                message = " ".join(parts[1:]) if parts else "empty response"
+                raise RuntimeError(f"server error: {message}")
+
+            if len(parts) != 3:
+                raise RuntimeError("invalid success header")
+
+            try:
+                total_bytes = int(parts[1])
+                expected_bytes = int(parts[2])
+            except ValueError as exc:
+                raise RuntimeError("invalid byte count in server header") from exc
+
+            if total_bytes < 0 or expected_bytes < 0 or expected_bytes > total_bytes:
+                raise RuntimeError("invalid byte count in server header")
+
+            if len(data) > expected_bytes:
+                raise RuntimeError("server sent more data than advertised")
+
+            with open(out_path, "wb") as output_file:
+                if data:
+                    output_file.write(data)
+                    hasher.update(data)
+                    received += len(data)
+
+                while received < expected_bytes:
+                    chunk = sock.recv(min(CHUNK_SIZE, expected_bytes - received))
+                    if not chunk:
+                        break
+                    output_file.write(chunk)
+                    hasher.update(chunk)
+                    received += len(chunk)
+
+            duration = time.time() - start
+            mbps = (received * 8) / (duration * 1_000_000) if duration > 0 else 0.0
+
+            complete = received == expected_bytes
+            if expected_hash is not None:
+                hash_match = hasher.hexdigest().lower() == expected_hash.lower()
+
+            if not complete:
+                status = "FAIL"
+                error_message = (
+                    f"incomplete download: received {received} of "
+                    f"{expected_bytes} bytes"
+                )
+            elif expected_hash is None:
+                status = "UNVERIFIED"
+            elif hash_match:
+                status = "PASS"
+            else:
+                status = "FAIL"
+                error_message = "SHA-256 hash mismatch"
+
+    except (OSError, RuntimeError, ConnectionError) as exc:
+        duration = time.time() - start
+        mbps = (received * 8) / (duration * 1_000_000) if duration > 0 else 0.0
+        error_message = str(exc)
+
+    if error_message:
+        print(f"[{client_id}] Download failed: {error_message}")
+    else:
+        print(
+            f"[{client_id}] Download {status}: {received} bytes "
+            f"in {duration:.2f}s ({mbps:.2f} Mbps)"
+        )
 
     os.makedirs(os.path.dirname(CLIENT_TRANSFERS_CSV), exist_ok=True)
-    write_hdr = not os.path.isfile(CLIENT_TRANSFERS_CSV)
-    with open(CLIENT_TRANSFERS_CSV, 'a', newline='') as f:
-        w = csv.writer(f)
-        if write_hdr:
-            w.writerow(['timestamp', 'client_id', 'target_ip', 'filename', 'size_bytes', 'ttfb_ms', 'duration_s', 'throughput_mbps', 'sha256_match'])
-        w.writerow([datetime.now().isoformat(), client_id, target_ip, filename, received, round(ttfb,2), round(dur,3), round(mbps,2), match])
-    s.close()
+    write_header = not os.path.isfile(CLIENT_TRANSFERS_CSV)
 
-if __name__ == '__main__':
-    p = argparse.ArgumentParser()
-    p.add_argument('--id', default='c1')
-    p.add_argument('--file', required=True)
-    p.add_argument('--hash', default=None)
-    args = p.parse_args()
+    with open(CLIENT_TRANSFERS_CSV, "a", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        if write_header:
+            writer.writerow(
+                [
+                    "timestamp",
+                    "client_id",
+                    "target_ip",
+                    "filename",
+                    "size_bytes",
+                    "ttfb_ms",
+                    "duration_s",
+                    "throughput_mbps",
+                    "sha256_match",
+                    "status",
+                ]
+            )
+
+        writer.writerow(
+            [
+                datetime.now().isoformat(),
+                client_id,
+                target_ip,
+                filename,
+                received,
+                round(ttfb, 2),
+                round(duration, 3),
+                round(mbps, 2),
+                hash_match,
+                status,
+            ]
+        )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--id", default="c1")
+    parser.add_argument("--file", required=True)
+    parser.add_argument("--hash", default=None)
+    args = parser.parse_args()
+
     download(args.id, args.file, args.hash)

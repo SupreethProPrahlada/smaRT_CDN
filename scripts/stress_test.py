@@ -1,152 +1,255 @@
 #!/usr/bin/env python3
-"""
-smaRT_CDN Multi-Client Concurrency Stress Tester (Sprint 2)
-"""
-import sys
-import os
 
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+import argparse
+import csv
+import hashlib
+import os
+import socket
+import sys
+import threading
+import time
+from datetime import datetime
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import time
-import socket
-import hashlib
-import argparse
-import threading
-from datetime import datetime
-from config.settings import VIP_IP, CONTENT_PORT, CHUNK_SIZE, CLIENT_TRANSFERS_CSV
+from config.settings import (
+    VIP_IP,
+    CONTENT_PORT,
+    CHUNK_SIZE,
+    CLIENT_TRANSFERS_CSV,
+)
 
 results_lock = threading.Lock()
 worker_results = []
 
-def download_worker(worker_id: int, filename: str, vip: str, port: int):
-    t_start = time.time()
-    sha256 = hashlib.sha256()
-    total_bytes = 0
-    success = False
-    error_msg = ""
+
+def download_worker(worker_id, filename, vip, port, expected_hash):
+    start = time.time()
+    ttfb_ms = 0.0
+    received = 0
+    expected_bytes = None
+    hasher = hashlib.sha256()
+    error = None
+    hash_match = None
 
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(10.0)
-        s.connect((vip, port))
+        with socket.create_connection((vip, port), timeout=15) as sock:
+            sock.settimeout(30)
+            sock.sendall(f"GET {filename} 0\n".encode("utf-8"))
 
-        # Send GET request with starting offset 0
-        s.sendall(f"GET {filename} 0\n".encode('utf-8'))
+            header_buffer = b""
+            while b"\n" not in header_buffer:
+                chunk = sock.recv(1024)
+                if not chunk:
+                    raise ConnectionError("server closed before sending a response")
+                header_buffer += chunk
 
-        # Read header: OK <total> <remain>\n
-        hdr = b""
-        while b"\n" not in hdr:
-            c = s.recv(1024)
-            if not c:
-                break
-            hdr += c
+            ttfb_ms = (time.time() - start) * 1000.0
+            header, _, data = header_buffer.partition(b"\n")
+            parts = header.decode(errors="replace").split()
 
-        line = hdr.split(b"\n")[0].decode()
-        if not line.startswith("OK"):
-            raise Exception(f"Server rejected: {line}")
+            if not parts or parts[0] != "OK":
+                message = " ".join(parts[1:]) if parts else "empty response"
+                raise RuntimeError(f"server error: {message}")
 
-        # Any extra data received with the header
-        extra = hdr[len(line) + 1:]
-        if extra:
-            total_bytes += len(extra)
-            sha256.update(extra)
+            if len(parts) != 3:
+                raise RuntimeError("invalid success header")
 
-        # Stream binary payload
-        while True:
-            chunk = s.recv(CHUNK_SIZE)
-            if not chunk:
-                break
-            total_bytes += len(chunk)
-            sha256.update(chunk)
+            try:
+                total_bytes = int(parts[1])
+                expected_bytes = int(parts[2])
+            except ValueError as exc:
+                raise RuntimeError("invalid byte count in server header") from exc
 
-        # Validate completeness
-        advertised = int(line.split()[1]) if line.startswith('OK') else 0
-        if advertised > 0 and total_bytes != advertised:
-            error_msg = f"Incomplete: got {total_bytes} of {advertised} bytes"
+            if (
+                total_bytes < 0
+                or expected_bytes < 0
+                or expected_bytes > total_bytes
+            ):
+                raise RuntimeError("invalid byte count in server header")
+
+            if len(data) > expected_bytes:
+                raise RuntimeError("server sent more data than advertised")
+
+            received = len(data)
+            hasher.update(data)
+
+            while received < expected_bytes:
+                chunk = sock.recv(min(CHUNK_SIZE, expected_bytes - received))
+                if not chunk:
+                    break
+                received += len(chunk)
+                hasher.update(chunk)
+
+        digest = hasher.hexdigest()
+        complete = received == expected_bytes
+
+        if expected_hash is not None:
+            hash_match = digest.lower() == expected_hash.lower()
+
+        if not complete:
+            status = "FAIL"
+            error = f"incomplete: received {received} of {expected_bytes} bytes"
+        elif expected_hash is None:
+            status = "UNVERIFIED"
+        elif hash_match:
+            status = "PASS"
         else:
-            success = True
-        s.close()
-    except Exception as e:
-        error_msg = str(e)
+            status = "FAIL"
+            error = "SHA-256 hash mismatch"
 
-    duration = time.time() - t_start
-    mbps = (total_bytes * 8.0) / (duration * 1_000_000.0) if duration > 0 else 0.0
-    digest = sha256.hexdigest()
+    except (OSError, RuntimeError, ConnectionError) as exc:
+        digest = hasher.hexdigest()
+        status = "FAIL"
+        error = str(exc)
+        if expected_hash is not None:
+            hash_match = digest.lower() == expected_hash.lower()
+
+    duration = time.time() - start
+    mbps = (received * 8.0) / (duration * 1_000_000.0) if duration > 0 else 0.0
 
     result = {
-        'worker_id': worker_id,
-        'bytes': total_bytes,
-        'duration': duration,
-        'mbps': mbps,
-        'sha256': digest,
-        'success': success,
-        'error': error_msg
+        "worker_id": worker_id,
+        "filename": filename,
+        "vip": vip,
+        "bytes": received,
+        "expected_bytes": expected_bytes,
+        "duration": duration,
+        "ttfb_ms": ttfb_ms,
+        "mbps": mbps,
+        "sha256": digest,
+        "sha256_match": hash_match,
+        "status": status,
+        "error": error,
     }
 
     with results_lock:
         worker_results.append(result)
 
-def log_to_csv(filename: str, concurrency: int, agg_mbps: float):
+
+def log_to_csv():
     os.makedirs(os.path.dirname(CLIENT_TRANSFERS_CSV), exist_ok=True)
-    write_header = not os.path.exists(CLIENT_TRANSFERS_CSV)
-    with open(CLIENT_TRANSFERS_CSV, 'a', encoding='utf-8') as f:
+    write_header = not os.path.isfile(CLIENT_TRANSFERS_CSV)
+
+    with open(CLIENT_TRANSFERS_CSV, "a", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+
         if write_header:
-            f.write("timestamp,client_id,file_name,bytes_received,duration_sec,throughput_mbps,sha256,tag\n")
-        ts = datetime.utcnow().isoformat() + "Z"
-        for r in worker_results:
-            f.write(f"{ts},worker_{r['worker_id']},{filename},{r['bytes']},{r['duration']:.3f},{r['mbps']:.2f},{r['sha256']},stress_c{concurrency}\n")
+            writer.writerow(
+                [
+                    "timestamp",
+                    "client_id",
+                    "target_ip",
+                    "filename",
+                    "size_bytes",
+                    "ttfb_ms",
+                    "duration_s",
+                    "throughput_mbps",
+                    "sha256_match",
+                    "status",
+                ]
+            )
+
+        timestamp = datetime.now().isoformat()
+
+        for result in sorted(worker_results, key=lambda item: item["worker_id"]):
+            writer.writerow(
+                [
+                    timestamp,
+                    f"worker_{result['worker_id']}",
+                    result["vip"],
+                    result["filename"],
+                    result["bytes"],
+                    round(result["ttfb_ms"], 2),
+                    round(result["duration"], 3),
+                    round(result["mbps"], 2),
+                    result["sha256_match"],
+                    result["status"],
+                ]
+            )
+
 
 def main():
-    parser = argparse.ArgumentParser(description="CDN Concurrency Stress Tester")
-    parser.add_argument("--concurrency", type=int, default=3, help="Number of concurrent client streams (default: 3)")
-    parser.add_argument("--file", type=str, default="test_10M.bin", help="Filename to request (default: test_10M.bin)")
-    parser.add_argument("--vip", type=str, default=VIP_IP, help="Target Anycast VIP")
-    parser.add_argument("--port", type=int, default=CONTENT_PORT, help="Target Port")
+    parser = argparse.ArgumentParser(description="CDN concurrency stress tester")
+    parser.add_argument("--concurrency", type=int, default=3)
+    parser.add_argument("--file", default="test_10M.bin")
+    parser.add_argument("--vip", default=VIP_IP)
+    parser.add_argument("--port", type=int, default=CONTENT_PORT)
+    parser.add_argument(
+        "--hash",
+        default=None,
+        help="Expected SHA-256 hash for verifying each downloaded file",
+    )
     args = parser.parse_args()
 
-    print("==================================================================")
-    print(f"       smaRT_CDN CONCURRENCY STRESS TEST (N={args.concurrency})   ")
-    print("==================================================================")
-    print(f"Target Anycast VIP : {args.vip}:{args.port}")
-    print(f"Target Payload     : {args.file}")
-    print(f"Launching {args.concurrency} concurrent streams simultaneously ...")
-    print("------------------------------------------------------------------")
+    if args.concurrency < 1:
+        parser.error("--concurrency must be at least 1")
+
+    worker_results.clear()
+
+    print(f"Target: {args.vip}:{args.port}")
+    print(f"File: {args.file}")
+    print(f"Launching {args.concurrency} concurrent streams")
 
     threads = []
-    t_global_start = time.time()
+    wall_start = time.time()
 
-    for i in range(1, args.concurrency + 1):
-        t = threading.Thread(target=download_worker, args=(i, args.file, args.vip, args.port))
-        threads.append(t)
-        t.start()
+    for worker_id in range(1, args.concurrency + 1):
+        thread = threading.Thread(
+            target=download_worker,
+            args=(worker_id, args.file, args.vip, args.port, args.hash),
+        )
+        threads.append(thread)
+        thread.start()
 
-    for t in threads:
-        t.join()
+    for thread in threads:
+        thread.join()
 
-    total_wall_time = time.time() - t_global_start
-    total_bytes_transferred = sum(r['bytes'] for r in worker_results)
-    agg_mbps = (total_bytes_transferred * 8.0) / (total_wall_time * 1_000_000.0) if total_wall_time > 0 else 0.0
+    wall_time = time.time() - wall_start
+    total_bytes = sum(result["bytes"] for result in worker_results)
+    aggregate_mbps = (
+        (total_bytes * 8.0) / (wall_time * 1_000_000.0)
+        if wall_time > 0
+        else 0.0
+    )
 
-    print(f" {'STREAM':<8} {'BYTES':<12} {'TIME (s)':<10} {'THROUGHPUT':<14} {'INTEGRITY':<8}")
-    print("------------------------------------------------------------------")
     all_pass = True
-    for r in sorted(worker_results, key=lambda x: x['worker_id']):
-        status = "PASS" if r['success'] and r['bytes'] > 0 else "FAIL"
-        if not r['success']:
+
+    print()
+    print(f"{'STREAM':<10}{'BYTES':<14}{'TIME (s)':<12}{'THROUGHPUT':<16}{'STATUS'}")
+
+    for result in sorted(worker_results, key=lambda item: item["worker_id"]):
+        print(
+            f"Worker {result['worker_id']:<3}"
+            f"{result['bytes']:<14}"
+            f"{result['duration']:<12.2f}"
+            f"{result['mbps']:.2f} Mbps     "
+            f"{result['status']}"
+        )
+
+        if result["status"] != "PASS":
             all_pass = False
-        print(f" Worker {r['worker_id']:<2} {r['bytes']:<12} {r['duration']:<10.2f} {r['mbps']:<6.2f} Mbps    {status}")
 
-    print("------------------------------------------------------------------")
-    print(f" Total Transferred : {total_bytes_transferred / (1024*1024):.2f} MB")
-    print(f" Wall Clock Time   : {total_wall_time:.2f} seconds")
-    print(f" Aggregate Bandwidth: {agg_mbps:.2f} Mbps")
-    print(f" Data Integrity    : {'100% MATCH (PASS)' if all_pass else 'CORRUPTION DETECTED'}")
-    print("==================================================================")
+        if result["error"]:
+            print(f"  Error: {result['error']}")
 
-    log_to_csv(args.file, args.concurrency, agg_mbps)
+    print()
+    print(f"Total transferred: {total_bytes / (1024 * 1024):.2f} MB")
+    print(f"Wall clock time:   {wall_time:.2f} seconds")
+    print(f"Aggregate rate:    {aggregate_mbps:.2f} Mbps")
+
+    if args.hash is None:
+        print("Integrity:         UNVERIFIED (no expected hash supplied)")
+    elif all_pass:
+        print("Integrity:         PASS (all sizes and hashes verified)")
+    else:
+        print("Integrity:         FAIL")
+
+    log_to_csv()
     print(f"Results appended to: {CLIENT_TRANSFERS_CSV}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
