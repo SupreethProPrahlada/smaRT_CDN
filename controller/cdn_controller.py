@@ -43,7 +43,7 @@ class SmartCDNController(app_manager.RyuApp):
 
         if dpid in SERVER_SWITCH_PORTS:
             cfg = SERVER_SWITCH_PORTS[dpid]
-            add_flow(dp, priority=200, match=parser.OFPMatch(eth_type=PROBE_ETHERTYPE), actions=[parser.OFPActionOutput(cfg['s1_trunk_port'])])
+            add_flow(dp, priority=200, match=parser.OFPMatch(eth_type=PROBE_ETHERTYPE), actions=[parser.OFPActionOutput(ofproto.OFPP_IN_PORT)])
             add_flow(dp, priority=10, match=parser.OFPMatch(in_port=cfg['server_port']), actions=[parser.OFPActionOutput(cfg['s1_trunk_port'])])
             add_flow(dp, priority=10, match=parser.OFPMatch(in_port=cfg['s1_trunk_port']), actions=[parser.OFPActionOutput(cfg['server_port'])])
 
