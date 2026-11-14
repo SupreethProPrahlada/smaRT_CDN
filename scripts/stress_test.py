@@ -254,7 +254,7 @@ def main():
         print("Integrity:         FAIL")
 
     log_to_csv()
-    print(f"Results appended to: {CLIENT_TRANSFERS_CSV}")
+    print("Transfer results logged.")
 
 
 if __name__ == "__main__":
