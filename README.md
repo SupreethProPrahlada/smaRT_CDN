@@ -151,6 +151,11 @@ smaRT_CDN/
 │   └── data/
 │       └── client-transfers.csv # Automated download benchmark logs
 ```
+
+### Replica Selection & All-Down Fallback Policy
+- **Dynamic Mode (`cdn_mode="dynamic"`):** Scores all replicas with `status == "UP"` using normalized RTT latency, link utilization, and active connection count.
+- **All-Servers-Down Fallback:** If all replicas report `status != "UP"`, `ServerSelector` deterministically falls back to the primary replica (`srv1`, `10.0.0.11`) so VIP NAT flows continue routing without dropping requests.
+
 ---
 ## 👥 Course Team Responsibilities
 * **Developer 1 (Supreeth Prahlada):** Sprints 0, 1, 2 — Lead Architecture, VIP NAT, Telemetry Probing, 3-Factor Selection Engine, Profiles, Dashboard, Stress Tester. *(COMPLETED)*

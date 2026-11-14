@@ -5,12 +5,22 @@ class ServerSelector:
         self.cdn_mode = cdn_mode
         self.weights = SELECTION_WEIGHTS
 
+    DEFAULT_FALLBACK_SERVER = "srv1"
+
     def select_server(self, client_id, telemetry):
+        """Select a replica server using static mapping or 3-factor dynamic scoring.
+
+        All-Down Fallback Policy (FR-5):
+            If no servers report status == 'UP', deterministically fall back to
+            DEFAULT_FALLBACK_SERVER ('srv1', the primary 100 Mbps replica) so VIP
+            flows continue forwarding without dropping client sessions.
+        """
         if self.cdn_mode == "static":
-            return SERVERS[STATIC_MAPPING.get(client_id, "srv1")]
+            return SERVERS[STATIC_MAPPING.get(client_id, self.DEFAULT_FALLBACK_SERVER)]
 
         available = {k: v for k, v in telemetry.items() if v.get('status', 'UP') == 'UP'}
-        if not available: return SERVERS['srv1']
+        if not available:
+            return SERVERS[self.DEFAULT_FALLBACK_SERVER]
 
         rtts = [d.get('rtt_ms', 50.0) for d in available.values()]
         conns = [d.get('active_conns', 0) for d in available.values()]
