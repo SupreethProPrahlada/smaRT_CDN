@@ -1,20 +1,13 @@
 # Smart CDN (Software-Defined Content Delivery Network)
-
 **Course:** Software Engineering 3K04 / 3M04 — McMaster University  
 **Lead Architecture & SDN Core:** Supreeth Prahlada (Developer 1)  
 **Delivered Sprints:** Sprint 0, Sprint 1, Sprint 2 (Fully Completed & Verified on `main`)
-
 ---
-
 ## 📖 Executive Summary
 Smart CDN is an intelligent, Software-Defined Content Delivery Network built on **OpenFlow 1.3**, the **Ryu SDN Controller**, and **Mininet**. 
-
 Instead of requiring clients to know physical backend server IP addresses, clients communicate with a single **Anycast Virtual IP (VIP: `10.0.0.100:8000`)**. Ingress switch `s1` dynamically inspects live network telemetry (RTT latency, trunk port utilization, and active server load) and rewrites Layer 4 bidirectional NAT flow rules to seamlessly direct traffic to the optimal backend server replica with zero data corruption.
-
 ---
-
 ## 🏗️ System Architecture & Topology
-
 ```text
                   +-----------------------------------+
                   |   Ryu SDN Controller (OpenFlow)   |
@@ -33,9 +26,7 @@ Instead of requiring clients to know physical backend server IP addresses, clien
                                     +-------------------->| s4 |------->| srv3 | (10.0.0.13)
                                                           +----+        +------+
 ```
-
 ### Network Topology Specifications
-
 | Node | Role | IP Address | MAC Address | Link Characteristics |
 | :--- | :--- | :--- | :--- | :--- |
 | **VIP** | Anycast Gateway | `10.0.0.100` | `00:00:00:00:01:00` | Port 8000 (TCP Streaming) |
@@ -44,16 +35,12 @@ Instead of requiring clients to know physical backend server IP addresses, clien
 | **srv2** | Secondary Edge Replica | `10.0.0.12` | `00:00:00:00:00:12` | `s1-s3`: 50 Mbps, 20 ms delay |
 | **srv3** | Backup Edge Replica | `10.0.0.13` | `00:00:00:00:00:13` | `s1-s4`: 10 Mbps, 50 ms delay |
 | **c1 - c6** | Client Request Pool | `10.0.0.1` – `10.0.0.6` | `00:00:00:00:00:01-06` | Edge access links (100 Mbps, 1 ms) |
-
 ---
-
 ## 🎯 Developer 1 Deliverables (Sprints 0 - 2)
-
 ### 1. Sprint 0: Foundations & Architecture
 * **Standard Repository Scaffold:** Structured tree separating `config/`, `topology/`, `controller/`, `app/`, `tests/`, `results/`, `scripts/`, and `docs/`.
 * **Central Data Dictionary (`config/settings.py`):** Single source of truth for VIPs, hardware MACs, streaming ports (8000), telemetry ports (9000), and link profiles.
 * **Interface Contracts (`docs/INTERFACE_CONTRACTS.md`):** Formal specifications for OpenFlow flow tables, UDP telemetry schemas, and chunk protocols.
-
 ### 2. Sprint 1: Baseline Architecture & VIP Streaming
 * **Mininet Software-Defined Topology (`topology/topo.py`):** Multi-tier topology with shaped asymmetric links, auto-inheriting the virtual environment PATH.
 * **Chunked Binary Server (`app/server.py`):** High-throughput TCP server delivering files in 64 KB binary chunks with protocol headers (`OK <total_bytes> <remain_bytes>`).
@@ -61,8 +48,6 @@ Instead of requiring clients to know physical backend server IP addresses, clien
 * **OpenFlow Ingress Controller (`controller/cdn_controller.py` & `controller/paths.py`):**
   * Custom ARP handler resolving VIP queries to `00:00:00:00:01:00`.
   * Dynamic bidirectional OpenFlow 1.3 Layer 4 NAT flows rewriting VIP <-> server IPs and MACs.
-* **Payload Generator (`tests/make_content.py`):** Automated generation of binary test files (e.g., 10 MB payload).
-
 ### 3. Sprint 2: Real-Time Telemetry & Smart Server Selection
 * **3-Factor Cost Selection Engine (`controller/selector.py`):**
   Dynamically evaluates candidate servers using normalized weights:
@@ -71,67 +56,54 @@ Instead of requiring clients to know physical backend server IP addresses, clien
   * `balanced` (Default): 40% Latency, 40% Utilization, 20% Load.
   * `gaming`: 80% Latency, 10% Utilization, 10% Load (Low-latency optimization).
   * `bulk_video`: 20% Latency, 70% Utilization, 10% Load (High-throughput optimization).
-* **OpenFlow TCAM Flow Table Lifecycle:** Ingress switch `s1` enforces `idle_timeout=15s` and `hard_timeout=60s` on all active NAT flows.
 * **Active SDN Probing:** Controller injects custom EtherType `0x88B5` probe frames every 1.0s to measure path RTT, smoothed via Exponential Moving Average (alpha = 0.5).
-* **Live Bandwidth Monitoring:** Polls OpenFlow port statistics (`OFPPortStatsRequest`) every 1.0s to calculate real-time trunk utilization.
+* **Live Bandwidth Monitoring:** Polls OpenFlow port statistics (`OFPPortStatsRequest`) every 1.0s to calculate real-time trunk utilization (peaked at 33% - 55% during transfers).
 * **Out-of-Band Server Telemetry:** Server daemon broadcasts UDP heartbeats (`STATUS <id> <active_conns> <ts>`) to `10.0.0.254:9000` every 2.0s.
-* **Real-Time Terminal Monitor (`scripts/dashboard.py`):** Live-updating ASCII terminal dashboard rendering RTT meters, bandwidth utilization, server health, and profile weights.
-* **Concurrency Stress Tester (`scripts/stress_test.py`):** Multi-threaded VIP load generator measuring aggregate throughput and validating SHA-256 integrity.
-
+* **Live NOC Terminal Dashboard (`scripts/dashboard.py`):** Real-time ASCII dashboard with colored Unicode meters, server IPs, link characteristics, and transfer history.
+* **Multi-Stream Concurrency Stress Tester (`scripts/stress_test.py`):** Multi-threaded VIP load generator measuring aggregate throughput and validating SHA-256 integrity.
 ---
-
 ## 📊 Live Verification & Benchmarks
-
 | Metric | Dynamic Smart Selection (Sprint 2) | Static Baseline (`CDN_MODE=static`) |
 | :--- | :--- | :--- |
 | **Server Selected** | **srv1** (Lowest Latency: 10 ms RTT) | **srv2** (Enforced: 40 ms RTT) |
-| **Single Client Throughput**| **39.26 Mbps** (10 MB in 3.28s) | **14.48 Mbps** (10 MB in 5.79s) |
-| **Multi-Stream Stress Test**| **70+ Mbps** aggregate bandwidth across 3 concurrent streams | Single-stream bound |
+| **Single Client Throughput**| **34.30 Mbps** (10 MB in 2.45s) | **14.48 Mbps** (10 MB in 5.79s) |
+| **Multi-Stream Stress Test**| **44.45 Mbps** aggregate bandwidth across 3 concurrent streams (30 MB in 5.40s) | Single-stream bound |
 | **Data Integrity** | `PASS` (SHA-256: 100% Match) | `PASS` (SHA-256: 100% Match) |
-| **TCAM Flow Expiry** | Flows purge automatically 15s after transfer | Requires manual deletion |
-
+| **Peak Trunk Utilization** | **33.4% – 55.0%** captured live on `s1-s2` during active transfer | Link-bound on `s1-s3` |
 ---
-
 ## 🚀 Execution & Quickstart Guide
-
 ### 1. Start Ryu Controller (Terminal 1)
 ```
-source ~/ryu-env/bin/activate
 cd ~/smaRT_CDN
-
-# Run in Default Balanced Mode:
+source ~/ryu-env/bin/activate
+# Run in Default Dynamic Mode:
 ryu-manager controller/cdn_controller.py
-
 # OR Run with Low-Latency Gaming Profile:
 # CDN_PROFILE=gaming ryu-manager controller/cdn_controller.py
-
-# OR Run with Static Comparison Baseline:
-# CDN_MODE=static ryu-manager controller/cdn_controller.py
 ```
-
-### 2. Launch Mininet Topology (Terminal 2)
+### 2. Launch Mininet Topology & Servers (Terminal 2)
 ```
 cd ~/smaRT_CDN
+sudo mn -c
 sudo python3 topology/topo.py
+# Inside Mininet CLI, start edge replica servers:
+mininet> srv1 python3 app/server.py --id srv1 --ip 10.0.0.11 &
+mininet> srv2 python3 app/server.py --id srv2 --ip 10.0.0.12 &
+mininet> srv3 python3 app/server.py --id srv3 --ip 10.0.0.13 &
 ```
-
-### 3. Launch Live Telemetry Dashboard (Terminal 3)
+### 3. Launch Live NOC Dashboard (Terminal 3)
 ```
 cd ~/smaRT_CDN
 python3 scripts/dashboard.py
 ```
-
 ### 4. Run Client Downloads & Stress Tests (Inside Mininet CLI)
 ```
-# Standard single download via Anycast VIP:
+# Single client download via Anycast VIP:
 mininet> c1 python3 app/client.py --id c1 --file test_10M.bin
-
-# Run 3 concurrent streaming workers against Anycast VIP:
+# 3 concurrent streams against Anycast VIP:
 mininet> c1 python3 scripts/stress_test.py --concurrency 3 --file test_10M.bin
 ```
-
 ---
-
 ## 📁 Repository Structure
 ```text
 smaRT_CDN/
@@ -140,14 +112,14 @@ smaRT_CDN/
 ├── topology/
 │   └── topo.py                  # Mininet SDN topology (4 switches, 6 clients, 3 servers)
 ├── controller/
-│   ├── cdn_controller.py        # Ryu OpenFlow 1.3 VIP NAT, probes, TCAM flow aging
+│   ├── cdn_controller.py        # Ryu OpenFlow 1.3 VIP NAT & telemetry collector
 │   ├── selector.py              # 3-Factor Cost Selection with Policy Profiles
 │   └── paths.py                 # OpenFlow flow rule installation helpers
 ├── app/
 │   ├── server.py                # 64 KB chunk server with UDP heartbeats & PING/PONG
 │   └── client.py                # VIP client with real-time SHA-256 verification
 ├── scripts/
-│   ├── dashboard.py             # Live ASCII telemetry monitor
+│   ├── dashboard.py             # Live ASCII NOC telemetry monitor
 │   └── stress_test.py           # Multi-threaded concurrent VIP stress tester
 ├── docs/
 │   ├── SPRINT_0.md              # Sprint 0 architecture & foundations log
@@ -158,12 +130,8 @@ smaRT_CDN/
 │   ├── live_routes.json         # Live atomic controller telemetry export
 │   └── data/
 │       └── client-transfers.csv # Automated download benchmark logs
-└── tests/
-    └── make_content.py          # Random binary payload generator
 ```
-
 ---
-
 ## 👥 Course Team Responsibilities
 * **Developer 1 (Supreeth Prahlada):** Sprints 0, 1, 2 — Lead Architecture, VIP NAT, Telemetry Probing, 3-Factor Selection Engine, Profiles, Dashboard, Stress Tester. *(COMPLETED)*
 * **Developer 2 (Shyam Sooraj):** Sprints 3, 4 — 10s Server Failover, Byte-Offset Client Resume, Detour Switch s5 Congestion Rerouting, HTML Route Map. *(NEXT UP)*
