@@ -15,3 +15,6 @@ dependencies = [
 [tool.uv]
 package = false
 no-build-isolation-package = ["ryu"]
+
+[tool.uv]
+dev-dependencies = ["pytest>=7.0"]

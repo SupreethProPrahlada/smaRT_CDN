@@ -1,3 +1,16 @@
+## Developer Environment Setup
+
+### Why Two Tools?
+- **uv** manages project Python dependencies (config/, app/, scripts/) via pyproject.toml.
+- **ryu-env** is a separate Python 3.9 venv required ONLY for Ryu 4.34 (incompatible with Python 3.10+). Not managed by uv.
+
+### One-Time Setup
+Install project dependencies: uv sync
+Activate project environment: source .venv/bin/activate
+For Ryu controller only: source ~/ryu-env/bin/activate
+
+---
+
 # Smart CDN (Software-Defined Content Delivery Network)
 **Course:** Software Engineering 3K04 / 3M04 — McMaster University  
 **Lead Architecture & SDN Core:** Supreeth Prahlada (Developer 1)  
