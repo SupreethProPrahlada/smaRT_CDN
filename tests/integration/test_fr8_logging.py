@@ -18,6 +18,7 @@ def test_tc17_json_export_contains_current_mode_and_servers(monkeypatch, tmp_pat
     controller.server_telemetry = {
         "srv1": {"status": "UP", "rtt_ms": 10.0, "utilization": 0.25, "active_conns": 2}
     }
+    controller._init_failover_state()
     out_path = tmp_path / "live_routes.json"
     monkeypatch.setattr(controller_module, "LIVE_ROUTES_JSON", str(out_path))
 
@@ -42,6 +43,7 @@ def test_tc39_controller_status_log_contains_telemetry():
     controller.server_telemetry = {
         "srv1": {"status": "UP", "rtt_ms": 12.5, "utilization": 0.25, "active_conns": 3}
     }
+    controller._init_failover_state()
 
     controller.log_controller_status()
 

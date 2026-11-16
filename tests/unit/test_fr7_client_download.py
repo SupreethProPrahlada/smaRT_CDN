@@ -3,6 +3,13 @@ import hashlib
 
 import pytest
 import app.client as client_module
+import config.transfer_logger as transfer_logger
+
+
+@pytest.fixture(autouse=True)
+def _instant_retries(monkeypatch):
+    """Sprint 3 retries wait CLIENT_RETRY_DELAY between attempts; skip the wait in unit tests."""
+    monkeypatch.setattr(client_module, "CLIENT_RETRY_DELAY", 0)
 
 
 class FakeStreamSocket:
@@ -27,7 +34,7 @@ class FakeStreamSocket:
 
 def _client_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(client_module, "CLIENT_DOWNLOAD_DIR", str(tmp_path / "downloads"))
-    monkeypatch.setattr(client_module, "CLIENT_TRANSFERS_CSV", str(tmp_path / "metrics.csv"))
+    monkeypatch.setattr(transfer_logger, "CLIENT_TRANSFERS_CSV", str(tmp_path / "metrics.csv"))
 
 
 def test_tc30_client_download_saves_verified_bytes(monkeypatch, tmp_path, capsys):
@@ -96,7 +103,7 @@ def test_tc18_client_csv_header_and_metrics(monkeypatch, tmp_path):
         rows = list(reader)
         assert reader.fieldnames == [
             "timestamp", "client_id", "target_ip", "filename", "size_bytes",
-            "ttfb_ms", "duration_s", "throughput_mbps", "sha256_match",
+            "ttfb_ms", "duration_s", "throughput_mbps", "sha256_match", "status",
         ]
     assert len(rows) == 1
     assert rows[0]["client_id"] == "c4"

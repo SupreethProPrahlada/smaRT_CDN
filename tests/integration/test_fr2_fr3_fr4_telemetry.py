@@ -22,6 +22,7 @@ def _controller():
         "srv3": {"status": "UP", "rtt_ms": 100.0, "utilization": 0.0, "active_conns": 0, "capacity": 10},
     }
     controller.port_stats_history = {}
+    controller._init_failover_state()
     return controller_module, controller
 
 

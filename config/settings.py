@@ -31,7 +31,27 @@ EMA_ALPHA = 0.5
 STATS_INTERVAL = 1.0
 
 HEARTBEAT_INTERVAL = 2.0
+# Sprint 3 (Developer 2): a server silent this long is DOWN and its flows are flushed.
+HEARTBEAT_TIMEOUT = 10.0
 CHUNK_SIZE = 65536
+
+# Sprint 3: client reconnects this many times, this far apart, resuming at its byte offset.
+# 12 x 1 s outlasts the 10 s heartbeat timeout, so a client survives a server crash.
+CLIENT_MAX_RETRIES = 12
+CLIENT_RETRY_DELAY = 1.0
+CLIENT_SOCKET_TIMEOUT = 5.0
+
+# Sprint 4: detour switch s5 gives srv1 a second path (s1 -> s5 -> s2).
+DETOUR_LINKS = {"s1-s5": {"bw": 100, "delay_ms": 10}, "s5-s2": {"bw": 100, "delay_ms": 5}}
+# Congestion-generator host behind s2; its traffic crosses the primary s1-s2 trunk.
+TRAFFIC_HOST = {"id": "bg", "ip": "10.0.0.20", "mac": "00:00:00:00:00:20"}
+# Switch ports of the detour and traffic-host links (topology/topo.py assigns them explicitly).
+S1_DETOUR_PORT = 10          # s1 -> s5
+S5_S1_PORT, S5_S2_PORT = 1, 2
+S2_DETOUR_PORT = 3           # s2 -> s5
+S2_TRAFFIC_PORT = 4          # s2 -> bg
+PATH_PROBE_TIMEOUT = 3.0     # no probe reply for this long: path is down
+CONGESTION_SHIFT = 0.5       # move srv1 flows when other traffic fills >= 50% more of the primary
 CONTENT_DIR = "/tmp/cdn_content"
 CLIENT_DOWNLOAD_DIR = "/tmp/client_downloads"
 

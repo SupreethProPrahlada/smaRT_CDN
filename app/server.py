@@ -66,7 +66,15 @@ class ContentServer:
                 sock.sendall(b"ERR Bad_Request\n")
                 return
 
+            # Sprint 3 traversal defence: only a plain file name inside CONTENT_DIR is served.
             filename = os.path.basename(parts[1])
+            content_root = os.path.realpath(CONTENT_DIR)
+            if (
+                filename in ("", ".", "..")
+                or os.path.dirname(os.path.realpath(os.path.join(content_root, filename))) != content_root
+            ):
+                sock.sendall(b"ERR Bad_Request\n")
+                return
 
             try:
                 offset = int(parts[2])

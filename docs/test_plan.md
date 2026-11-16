@@ -191,7 +191,58 @@ The suite exercises Sprint 1-2 configuration, selection, streaming, heartbeat se
 8. The supplied test-plan template refers to `tests/run_scenarios.py` and `tests/make_content.py`; are those expected deliverables for this repository and these sprints?
 9. Is live Mininet/Ryu test execution expected on this host, and which Python 3.9/Ryu/Mininet versions and privilege workflow should be used?
 
-21 Approvals
+21 Sprint 3-4 Addendum (Developer 2: Shyam Sooraj)
+
+Sprints 3-4 bring into scope the features Section 7 deferred: FR-4 crash detection and flow flushing, FR-7 byte-offset retry/resume and traversal defence, FR-6 congestion rerouting, FR-9 path-failure migration, FR-10 path recovery and FR-12 congestion generator, plus the HTML route map. Design, assumptions and live evidence are in `docs/SPRINT_3.md` and `docs/SPRINT_4.md`.
+
+| TC ID | Description | Expected Result | Actual Result | Status |
+|---|---|---|---|---|
+| TC42 | FR-7 resume after a dropped connection | Client reconnects with `GET <file> <received>` and verifies the whole file | Second request `GET f.bin 4`; full file saved; PASS, `retries=1` | Pass |
+| TC43 | FR-7 resume after a socket timeout | A stalled connection is retried from its offset | Second request `GET f.bin 2`; PASS | Pass |
+| TC44 | FR-7 resumed response for a different file size | Download fails instead of splicing data | FAIL "does not match" after 2 connections | Pass |
+| TC45 | FR-7 `ERR` reply is not retried | One connection, controlled failure | One connection; `File_Not_Found` reported | Pass |
+| TC46 | FR-7 retry limit | Stops after `CLIENT_MAX_RETRIES`, reports incomplete | 3 connections with limit 2; FAIL "received 2 of 10 bytes" | Pass |
+| TC47 | FR-7 server streams from an offset | `OK <total> <remaining>` and the remaining bytes | `OK 10 6` + `456789` | Pass |
+| TC48 | FR-7 traversal: directory names | `..`, `.`, `../../etc/passwd/..` refused | `ERR Bad_Request` for all three | Pass |
+| TC49 | FR-7 traversal: escaping symlink | Symlink to a file outside `CONTENT_DIR` refused | `ERR Bad_Request` | Pass |
+| TC50 | FR-4 heartbeat timeout and flow flush | DOWN after 10 s silence; s1 NAT rules deleted | srv2 DOWN; deletes by out_port 8 and `ipv4_src 10.0.0.12`; flows cleared | Pass |
+| TC51 | FR-4 recovery on next heartbeat | DOWN server returns to UP | srv1 UP after valid heartbeat | Pass |
+| TC52 | FR-4 / review issue 3: spoofed heartbeat | Heartbeat from another IP does not keep a dead server alive | srv1 still DOWN after spoofed heartbeat from 10.0.0.99 | Pass |
+| TC53 | FR-9 primary link down | Live srv1 flow moves to s5; s2 re-pointed | Forward rule out port 10; s2 per-client rule and srv1 egress to port 3 | Pass |
+| TC54 | FR-6 other traffic on the primary | Live srv1 flows move to the detour | Moved; logged "primary congested" | Pass |
+| TC55 | FR-6 a flow's own traffic | A busy primary carrying only our flow is not congestion | Util 97%, other traffic < 5%; stays on primary | Pass |
+| TC56 | FR-10 recovery | New flows use the primary again; live detour flows stay | `srv1_path` primary; flow still on detour; s2 egress back to port 2 | Pass |
+| TC57 | FR-2 / review issue 4: detour probe | Returning probe updates the detour RTT only | Detour RTT ~30 ms; primary RTT unchanged | Pass |
+| TC58 | FR-4/FR-7 timing configuration | 10 s timeout; client retries outlast it | Asserted | Pass |
+| TC59 | FR-12 generator command | Constant-rate UDP iperf to the sink | Asserted command | Pass |
+| TC60 | Route map content | Active path, link state, DOWN server and flows rendered | Asserted | Pass |
+| TC61 | Route map stale/missing data and escaping | Stale data flagged; text escaped; page written without data | Asserted | Pass |
+| TC62 | FR-6 unmeasured new flow | A flow whose rate is not yet measured is not counted as congestion | Other traffic 0%; stays on primary | Pass |
+| TC63 | FR-9 detour failure | Flows left on the detour move back when the detour fails | Flow moved; s1 forward rule out port 7 | Pass |
+
+Existing tests updated for the Sprint 3-4 code:
+- TC34 now expects s5 and bg.
+- Controller test helpers call `_init_failover_state()`.
+- The client tests patch `config.transfer_logger.CLIENT_TRANSFERS_CSV`, where the CSV path now lives.
+- TC18 expects the `status` column.
+- Before this, TC18, TC30-TC32 and TC41 failed on `main` because of that move.
+
+Execution (Python 3.9 via `uv sync --all-groups`, Ryu installed):
+- `uv run pytest -q`: 60 passed, 2 skipped (TC22 and TC24, which need agreed live acceptance criteria).
+- `-m "not integration"`: 39 passed.
+- `-m integration`: 21 passed, 2 skipped.
+- `compileall` and `git diff --check` clean.
+
+Live Mininet execution of the Sprint 3-4 scenarios passed 9/9 checks: probe RTT on all paths, server crash detection and resume, link-failure migration with no reconnect, recovery, congestion migration with no reconnect, and route-map output. Results are in `docs/SPRINT_3.md` and `docs/SPRINT_4.md`. That run used an Open vSwitch userspace datapath without link-delay emulation, with nominal delays added to probe samples; the RTT values should be re-measured on a standard Mininet host.
+
+Section 20 questions resolved by Sprints 3-4:
+- Q5: error responses are `ERR Bad_Request`, `ERR Bad_Offset` and `ERR File_Not_Found <name>`.
+- Q6: timeout/DOWN detection is implemented in Sprint 3 with a 10 s timeout.
+- Q7: the client fails a transfer whose bytes differ from the advertised total, with or without a hash.
+- Review issue 3: source-IP check is in place (TC10, TC52).
+- Review issue 4: the probe return path is verified (TC57 and the live run).
+
+22 Approvals
 
 Tester: Shreyansh Tandon — Signature: __________________ Date: __________
 Developer: Supreeth Prahalada — Signature: __________________ Date: __________

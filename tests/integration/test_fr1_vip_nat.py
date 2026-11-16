@@ -33,6 +33,7 @@ class FakeDatapath:
             OFPP_CONTROLLER=0xFFFFFFFD,
             OFPCML_NO_BUFFER=0xFFFF,
             OFPIT_APPLY_ACTIONS=4,
+            OFPFF_SEND_FLOW_REM=1,
         )
         self.ofproto_parser = FakeParser()
         self.messages = []
@@ -54,6 +55,8 @@ def _controller():
         "srv3": {"status": "UP", "rtt_ms": 100.0, "utilization": 0.0, "active_conns": 0},
     }
     controller.logger = SimpleNamespace(info=lambda *args, **kwargs: None)
+    controller.datapaths = {}
+    controller._init_failover_state()
     return controller
 
 
