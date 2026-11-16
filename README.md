@@ -13,7 +13,10 @@ From the repository root:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Open a new terminal if needed, then:
-cd ~/smaRT_CDN
+# Clone the repository:
+git clone https://github.com/SupreethProPrahlada/smaRT_CDN.git
+
+cd ./smaRT_CDN
 uv sync --all-groups
 ```
 
@@ -116,14 +119,20 @@ All Python commands use the same uv-managed `.venv`. Run Ryu and the dashboard a
 
 ### 1. Start Ryu Controller (Terminal 1)
 ```bash
-cd ~/smaRT_CDN
+# Clone the repository:
+git clone https://github.com/SupreethProPrahlada/smaRT_CDN.git
+
+cd ./smaRT_CDN
 uv run ryu-manager controller/cdn_controller.py
 ```
 Keep this terminal running.
 
 ### 2. Launch Mininet Topology (Terminal 2)
 ```bash
-cd ~/smaRT_CDN
+# Clone the repository:
+git clone https://github.com/SupreethProPrahlada/smaRT_CDN.git
+
+cd ./smaRT_CDN
 sudo mn -c
 sudo env "PATH=$PWD/.venv/bin:$PATH" "$PWD/.venv/bin/python" topology/topo.py
 ```
@@ -137,7 +146,10 @@ mininet> srv3 python3 app/server.py --id srv3 --ip 10.0.0.13 &
 
 ### 4. Launch Live NOC Dashboard (Terminal 3)
 ```bash
-cd ~/smaRT_CDN
+# Clone the repository:
+git clone https://github.com/SupreethProPrahlada/smaRT_CDN.git
+
+cd ./smaRT_CDN
 uv run python scripts/dashboard.py
 ```
 
