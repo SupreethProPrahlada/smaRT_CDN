@@ -24,15 +24,9 @@ This creates or updates the local `.venv` from the locked dependencies. Use `uv 
 
 ---
 
-# Smart CDN (Software-Defined Content Delivery Network)
-**Course:** Software Engineering 3K04 / 3M04 — McMaster University  
-**Lead Architecture & SDN Core:** Supreeth Prahlada (Developer 1)  
-**Server Failover & Path Rerouting (Sprints 3-4):** Shyam Sooraj (Developer 2)\
-**Delivered Sprints:** Sprints 0-4 (Completed & Verified on `main`)
+
 ---
-## 📖 Executive Summary
-Smart CDN is an intelligent, Software-Defined Content Delivery Network built on **OpenFlow 1.3**, the **Ryu SDN Controller**, and **Mininet**. 
-Instead of requiring clients to know physical backend server IP addresses, clients communicate with a single **Anycast Virtual IP (VIP: `10.0.0.100:8000`)**. Ingress switch `s1` dynamically inspects live network telemetry (RTT latency, trunk port utilization, and active server load) and rewrites Layer 4 bidirectional NAT flow rules to seamlessly direct traffic to the optimal backend server replica with zero data corruption.
+
 ---
 ## 🏗️ System Architecture & Topology
 ```text
