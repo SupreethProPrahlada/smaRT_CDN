@@ -29,7 +29,7 @@ class SmartCDNController(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.datapaths = {}
-        self.selector = ServerSelector(cdn_mode=DEFAULT_CDN_MODE)
+        self.selector = ServerSelector()
         self.server_telemetry = {
             'srv1': {'status': 'UP', 'rtt_ms': 10.0, 'utilization': 0.0, 'active_conns': 0, 'capacity': 100},
             'srv2': {'status': 'UP', 'rtt_ms': 40.0, 'utilization': 0.0, 'active_conns': 0, 'capacity': 50},
@@ -371,9 +371,16 @@ class SmartCDNController(app_manager.RyuApp):
                      for name, p in self.paths.items()}
             flows = [{'client': f['client'], 'server': f['server'], 'path': f['path'] or 'trunk',
                       'rate_mbps': round(f['rate_mbps'] or 0.0, 2)} for f in self.flows.values()]
+            routes = [{'client': f['client'], 'client_ip': f['client_ip'], 'server_id': f['server'],
+                       'path': f['path'] or 'trunk', 'rate_mbps': round(f['rate_mbps'] or 0.0, 2)}
+                      for f in self.flows.values()]
             with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump({'timestamp': time.time(), 'cdn_mode': self.selector.cdn_mode, 'servers': self.server_telemetry,
-                           'srv1_path': self.srv1_path, 'paths': paths, 'flows': flows}, f, indent=2)
+                json.dump({'timestamp': time.time(), 'cdn_mode': self.selector.cdn_mode,
+                           'detour_active': self.srv1_path == 'detour',
+                           'direct_link_up': self.paths['primary']['status'] == 'UP',
+                           'servers': self.server_telemetry,
+                           'srv1_path': self.srv1_path, 'paths': paths, 'flows': flows,
+                           'routes': routes}, f, indent=2)
             os.replace(tmp_path, LIVE_ROUTES_JSON)
         except Exception as exc:
             self.logger.warning(f"[Export] Failed to write {LIVE_ROUTES_JSON}: {exc}")

@@ -24,9 +24,14 @@ This creates or updates the local `.venv` from the locked dependencies. Use `uv 
 
 ---
 
-
+# Smart CDN (Software-Defined Content Delivery Network)
+**Course:** Software Engineering 3K04 / 3M04 — McMaster University
+**Team:** Supreeth Prahlada (Developer 1) · Shyam Sooraj (Developer 2) · Shreyansh Tandon (Tester)
+**Delivered Sprints:** Sprint 0, 1, 2, 3 and 4 (merged into `main`)
 ---
-
+## 📖 Executive Summary
+Smart CDN is an intelligent, Software-Defined Content Delivery Network built on **OpenFlow 1.3**, the **Ryu SDN Controller**, and **Mininet**.
+Instead of requiring clients to know physical backend server IP addresses, clients communicate with a single **Anycast Virtual IP (VIP: `10.0.0.100:8000`)**. Ingress switch `s1` dynamically inspects live network telemetry (RTT latency, trunk port utilization, and active server load) and rewrites Layer 4 bidirectional NAT flow rules to seamlessly direct traffic to the optimal backend server replica with zero data corruption.
 ---
 ## 🏗️ System Architecture & Topology
 ```text
@@ -95,8 +100,13 @@ This creates or updates the local `.venv` from the locked dependencies. Use `uv 
 * **Path Failure Migration (FR-9):** When `s1-s2` fails, live srv1 downloads are moved onto `s5` by rewriting their flow rules. The TCP connection is unchanged, so they continue with no reconnect.
 * **Congestion Rerouting (FR-6):** When other traffic fills at least 50% more of the primary than of the detour, srv1 flows move to `s5`. Each flow's own rate (from flow statistics) is excluded, so a busy download never reroutes itself.
 * **Path Recovery (FR-10):** Once the primary is healthy again, new srv1 flows use it.
-* **Congestion Generator (FR-12, `scripts/congestion.py`):** Constant-rate UDP iperf load from `bg` across the primary trunk.
-* **Live HTML Route Map (`scripts/route_map.py`):** Self-refreshing `results/route_map.html` showing every path's state, RTT and utilization, srv1's active path, and live flows.
+* **Congestion Generator (FR-12, `scripts/congestion.py`):** Constant-rate UDP iperf load from `bg` across the primary trunk, plus adaptive and seeded-random `--mode` generators for reproducible experiments (`app/traffic_sink.py` is the UDP sink).
+* **Live HTML Route Map (`scripts/route_map.py`):** Self-refreshing `results/route_map.html` showing every path's state, RTT and utilization, srv1's active path, and live flows. A browser dashboard at `tools/route_map.html` polls `results/live_routes.json` every second with green/orange/red load bands and dashed dead links.
+### Tester tooling (TP-SCDS-001)
+* **Scenario runner (`tests/run_scenarios.py`):** one command each for `smoke`, `failover`, `link-failure`, `congestion --congestion-mode random --seed 1`, and six-client `concurrent` runs, writing transfer rows and digest results.
+* **Deterministic content (`scripts/content.py`, `tests/make_content.py`):** repeatable binary payloads plus manifest for checksum comparisons.
+* **Experiment runner (`scripts/experiments.py`):** paired dynamic/static scenario rows appended to `results/data/experiments.csv`.
+* **Traceability (`docs/TP-SCDS-001_TRACEABILITY.md`):** maps the official TP-SCDS-001 TC01–TC24 cases to repository evidence and status.
 ---
 ## 📊 Live Verification & Benchmarks
 | Metric | Dynamic Smart Selection (Sprint 2) | Static Baseline (`CDN_MODE=static`) |

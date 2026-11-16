@@ -1,4 +1,5 @@
 import csv
+from pathlib import Path
 
 import scripts.dashboard as dashboard_module
 
@@ -22,3 +23,15 @@ def test_tc38_dashboard_safe_float_handles_bad_input():
     """TC38 Sprint 2 dashboard helper uses fallback on malformed numeric metrics."""
     assert dashboard_module.safe_float("bad", default=7.5) == 7.5
     assert dashboard_module.safe_float("12.25") == 12.25
+
+
+def test_tc18_route_map_refreshes_and_colours_links_by_load():
+    """TC18/SRS 3.1.1: visualizer polls telemetry and applies 50%/80% colour bands."""
+    html = (Path(__file__).resolve().parents[2] / "tools" / "route_map.html").read_text(
+        encoding="utf-8"
+    )
+    assert "../results/live_routes.json" in html
+    assert "setInterval(refresh, 1000)" in html
+    assert "utilization >= 0.8" in html
+    assert "utilization >= 0.5" in html
+    assert "link-" in html and "direct_link_up" in html

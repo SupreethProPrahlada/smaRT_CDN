@@ -24,3 +24,23 @@ def test_tc34_topology_builds_required_switches_hosts_and_trunks():
     assert (links[("s1", "s5")]["port1"], links[("s1", "s5")]["port2"]) == (10, 1)
     assert links[("s5", "s2")]["delay"] == "5ms"
     assert (links[("s5", "s2")]["port1"], links[("s5", "s2")]["port2"]) == (2, 3)
+
+
+@pytest.mark.integration
+def test_s4_topology_adds_detour_and_congestion_source():
+    """Sprint 4 FR-9/FR-12: s5 detour and the congestion source attach to the primary edge."""
+    pytest.importorskip("mininet.topo")
+    from config.settings import TRAFFIC_HOST
+    from topology.topo import SmartCDNTopo
+
+    topo = SmartCDNTopo()
+
+    assert "s5" in topo.switches()
+    assert TRAFFIC_HOST["id"] in topo.hosts()
+    links = {(src, dst): info for src, dst, info in topo.links(withInfo=True)}
+    assert ("s1", "s5") in links
+    assert ("s5", "s2") in links
+    assert (TRAFFIC_HOST["id"], "s2") in links
+    assert topo.port("s1", "s2") == (7, 2)
+    assert topo.port("s1", "s5") == (10, 1)
+    assert topo.port("s5", "s2") == (2, 3)

@@ -128,3 +128,29 @@ def test_tc03_unrelated_arp_target_gets_no_controller_reply():
     controller.packet_in_handler(_event(_arp_request("10.0.0.250"), dp))
 
     assert dp.messages == []
+
+
+def test_tc22_flow_rule_installation_within_twenty_ms():
+    """TC22 NFR-1: a new VIP connection is routed well inside 20 ms."""
+    import time
+
+    from ryu.lib.packet import ethernet, ipv4, packet, tcp
+
+    controller = _controller()
+    dp = FakeDatapath()
+    controller.datapaths = {1: dp}
+
+    request = packet.Packet()
+    request.add_protocol(ethernet.ethernet(
+        dst="00:00:00:00:01:00", src="00:00:00:00:00:01", ethertype=0x0800
+    ))
+    request.add_protocol(ipv4.ipv4(src="10.0.0.1", dst="10.0.0.100", proto=6))
+    request.add_protocol(tcp.tcp(src_port=40000, dst_port=8000))
+    request.serialize()
+
+    start = time.perf_counter()
+    controller.packet_in_handler(_event(request.data, dp))
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+    assert dp.messages, "controller must install NAT rules for a new connection"
+    assert elapsed_ms < 20.0

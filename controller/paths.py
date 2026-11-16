@@ -28,3 +28,13 @@ def delete_flows(datapath, match, out_port=None, priority=None):
         datapath=datapath, command=ofproto.OFPFC_DELETE if priority is None else ofproto.OFPFC_DELETE_STRICT,
         priority=priority or 0, out_port=ofproto.OFPP_ANY if out_port is None else out_port,
         out_group=ofproto.OFPG_ANY, match=match))
+
+
+def delete_flow(datapath, match):
+    """Compatibility alias: delete every rule matching ``match``."""
+    delete_flows(datapath, match)
+
+
+def should_use_detour(rtt_ms, baseline_rtt_ms, direct_link_up, threshold_ms=50.0):
+    """True when the primary path is down or its RTT has risen by the threshold."""
+    return not direct_link_up or rtt_ms - baseline_rtt_ms >= threshold_ms

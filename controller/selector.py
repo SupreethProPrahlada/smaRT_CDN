@@ -1,8 +1,11 @@
-from config.settings import SELECTION_WEIGHTS, STATIC_MAPPING, SERVERS
+import os
+
+from config.settings import DEFAULT_CDN_MODE, SELECTION_WEIGHTS, STATIC_MAPPING, SERVERS
 
 class ServerSelector:
-    def __init__(self, cdn_mode="dynamic"):
-        self.cdn_mode = cdn_mode
+    def __init__(self, cdn_mode=None):
+        requested_mode = cdn_mode or os.environ.get("CDN_MODE", DEFAULT_CDN_MODE)
+        self.cdn_mode = requested_mode if requested_mode in ("dynamic", "static") else DEFAULT_CDN_MODE
         self.weights = SELECTION_WEIGHTS
 
     DEFAULT_FALLBACK_SERVER = "srv1"
