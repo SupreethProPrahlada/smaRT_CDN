@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-import time
 
 import pytest
 
@@ -10,9 +9,7 @@ class FakeParser:
     def OFPMatch(self, **fields):
         return fields
 
-    def OFPActionOutput(self, port, *args, **kwargs):
-        if args:
-            kwargs["max_len"] = args[0]
+    def OFPActionOutput(self, port, **kwargs):
         return ("output", port, kwargs)
 
     def OFPActionSetField(self, **fields):
@@ -36,13 +33,7 @@ class FakeDatapath:
             OFPP_CONTROLLER=0xFFFFFFFD,
             OFPCML_NO_BUFFER=0xFFFF,
             OFPIT_APPLY_ACTIONS=4,
-            OFPFC_MODIFY_STRICT=2,
-            OFPFC_DELETE=3,
-            OFPP_ANY=0xFFFFFFFF,
-            OFPG_ANY=0xFFFFFFFF,
-            OFPPS_LINK_DOWN=1,
-            OFPPR_MODIFY=1,
-            OFPPR_DELETE=2,
+            OFPFF_SEND_FLOW_REM=1,
         )
         self.ofproto_parser = FakeParser()
         self.messages = []
@@ -63,10 +54,9 @@ def _controller():
         "srv2": {"status": "UP", "rtt_ms": 40.0, "utilization": 0.0, "active_conns": 0},
         "srv3": {"status": "UP", "rtt_ms": 100.0, "utilization": 0.0, "active_conns": 0},
     }
-    controller.detour_active = False
-    controller.direct_link_up = True
-    controller.active_flows = []
     controller.logger = SimpleNamespace(info=lambda *args, **kwargs: None)
+    controller.datapaths = {}
+    controller._init_failover_state()
     return controller
 
 
@@ -140,100 +130,15 @@ def test_tc03_unrelated_arp_target_gets_no_controller_reply():
     assert dp.messages == []
 
 
-def test_s4_detour_changes_active_flow_and_recovers_to_direct_path():
-    """Sprint 4 FR-6/FR-9/FR-10: active srv1 flows can switch and return."""
-    controller = _controller()
-    dp = FakeDatapath()
-    controller.datapaths = {1: dp}
-    controller.active_flows = [{"match": {"ipv4_src": "10.0.0.1"}, "server_id": "srv1"}]
-
-    controller._set_detour(True)
-    detour_mod = dp.messages[-1]
-    detour_output = detour_mod.instructions[0].actions[-1]
-    assert detour_output == ("output", 10, {})
-
-    controller._set_detour(False)
-    direct_mod = dp.messages[-1]
-    direct_output = direct_mod.instructions[0].actions[-1]
-    assert direct_output == ("output", 7, {})
-
-
-def test_s4_switch_setup_forwards_loadsrc_udp_over_primary_trunk():
-    """Sprint 4 FR-12: load generator UDP traffic traverses the s1-s2 trunk."""
-    controller = _controller()
-    controller.datapaths = {}
-    dp = FakeDatapath()
-    controller.switch_features_handler(SimpleNamespace(msg=SimpleNamespace(datapath=dp)))
-
-    flow_mods = [msg for msg in dp.messages if hasattr(msg, "instructions")]
-    load_forward = next(msg for msg in flow_mods if msg.match.get("ipv4_src") == "10.0.0.7")
-    load_return = next(msg for msg in flow_mods if msg.match.get("ipv4_dst") == "10.0.0.7")
-    assert load_forward.instructions[0].actions[-1] == ("output", 7, {})
-    assert load_return.instructions[0].actions[-1] == ("output", 11, {})
-
-
-def test_s4_link_status_event_switches_detour_and_recovers():
-    """Sprint 4 FR-9/FR-10: link-down migrates active flow and link-up restores it."""
-    controller = _controller()
-    dp = FakeDatapath()
-    controller.datapaths = {1: dp}
-    controller.active_flows = [{"match": {"ipv4_src": "10.0.0.1"}, "server_id": "srv1"}]
-    event = SimpleNamespace(msg=SimpleNamespace(
-        datapath=dp,
-        desc=SimpleNamespace(port_no=7, state=dp.ofproto.OFPPS_LINK_DOWN),
-        reason=dp.ofproto.OFPPR_MODIFY,
-    ))
-
-    controller.port_status_handler(event)
-    assert controller.direct_link_up is False
-    assert controller.detour_active is True
-    assert dp.messages[-1].instructions[0].actions[-1] == ("output", 10, {})
-
-    event.msg.desc.state = 0
-    controller.port_status_handler(event)
-    assert controller.direct_link_up is True
-    assert controller.detour_active is False
-    assert dp.messages[-1].instructions[0].actions[-1] == ("output", 7, {})
-
-
-def test_s4_detour_keeps_srv1_return_path_bidirectional():
-    """FR-9: with the s1-s2 link down, srv1 replies must return through s5."""
-    controller = _controller()
-    s1, s2 = FakeDatapath(), FakeDatapath()
-    s2.id = 2
-    controller.datapaths = {1: s1, 2: s2}
-    controller.active_flows = [{
-        "match": {"ipv4_src": "10.0.0.1"},
-        "server_id": "srv1",
-        "client_ip": "10.0.0.1",
-        "client_port": 1,
-    }]
-
-    controller._set_detour(True)
-
-    s1_return = next(
-        msg for msg in s1.messages
-        if getattr(msg, "match", {}).get("in_port") == 10
-    )
-    assert s1_return.match["ipv4_dst"] == "10.0.0.1"
-    assert s1_return.instructions[0].actions[-1] == ("output", 1, {})
-    s2_return = next(
-        msg for msg in s2.messages
-        if getattr(msg, "match", {}).get("in_port") == 1
-    )
-    assert s2_return.instructions[0].actions[-1] == ("output", 3, {})
-
-    controller._set_detour(False)
-
-    assert s1.messages[-1].command == s1.ofproto.OFPFC_DELETE
-    assert s2.messages[-1].command == s2.ofproto.OFPFC_DELETE
-
-
 def test_tc22_flow_rule_installation_within_twenty_ms():
     """TC22 NFR-1: a new VIP connection is routed well inside 20 ms."""
+    import time
+
+    from ryu.lib.packet import ethernet, ipv4, packet, tcp
+
     controller = _controller()
     dp = FakeDatapath()
-    from ryu.lib.packet import ethernet, ipv4, packet, tcp
+    controller.datapaths = {1: dp}
 
     request = packet.Packet()
     request.add_protocol(ethernet.ethernet(

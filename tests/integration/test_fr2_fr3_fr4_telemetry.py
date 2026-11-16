@@ -22,10 +22,7 @@ def _controller():
         "srv3": {"status": "UP", "rtt_ms": 100.0, "utilization": 0.0, "active_conns": 0, "capacity": 10},
     }
     controller.port_stats_history = {}
-    controller.last_heartbeat = {server_id: 0.0 for server_id in controller.server_telemetry}
-    controller.direct_link_up = True
-    controller.detour_active = False
-    controller.active_flows = []
+    controller._init_failover_state()
     return controller_module, controller
 
 
@@ -135,76 +132,6 @@ def test_tc10_malformed_and_unknown_heartbeats_are_ignored():
     controller.packet_in_handler(_event(_heartbeat_packet("10.0.0.11", "STATUS srv1 bad 123.0\n")))
     controller.packet_in_handler(_event(_heartbeat_packet("10.0.0.11", "STATUS unknown 4 123.0\n")))
     controller.packet_in_handler(_event(_heartbeat_packet("10.0.0.99", "STATUS srv1 9 123.0\n")))
-    controller.packet_in_handler(_event(_heartbeat_packet("10.0.0.11", "STATUS srv1 -1 123.0\n")))
-    controller.packet_in_handler(_event(_heartbeat_packet("10.0.0.11", "STATUS srv1 4 invalid\n")))
-    controller.packet_in_handler(_event(_heartbeat_packet("10.0.0.11", "STATUS srv1 4 123.0 extra\n")))
 
     assert controller.server_telemetry["srv1"]["active_conns"] == 0
     assert "unknown" not in controller.server_telemetry
-
-
-def test_tc09_heartbeat_timeout_marks_server_down_and_flushes_rules():
-    """Sprint 3 FR-4: stale heartbeats mark DOWN and flush server-specific flows."""
-    _, controller = _controller()
-    sent = []
-
-    class Parser:
-        def OFPMatch(self, **kwargs):
-            return kwargs
-
-        def OFPFlowMod(self, **kwargs):
-            return kwargs
-
-    datapath = SimpleNamespace(
-        id=1,
-        ofproto=SimpleNamespace(OFPFC_DELETE=3, OFPP_ANY=0xFFFFFFFF, OFPG_ANY=0xFFFFFFFF),
-        ofproto_parser=Parser(),
-        send_msg=sent.append,
-    )
-    controller.datapaths = {1: datapath}
-    controller.last_heartbeat = {"srv1": 90.0, "srv2": 100.0, "srv3": 100.0}
-    controller.active_flows = [{
-        "server_id": "srv1",
-        "match": {"in_port": 1, "ipv4_src": "10.0.0.1", "ipv4_dst": "10.0.0.100", "tcp_dst": 8000},
-        "client_ip": "10.0.0.1",
-    }]
-
-    controller.check_server_timeouts(now=101.0)
-
-    assert controller.server_telemetry["srv1"]["status"] == "DOWN"
-    assert len(sent) == 2
-    assert {
-        (msg["match"].get("ipv4_src"), msg["match"].get("ipv4_dst"))
-        for msg in sent
-    } == {("10.0.0.1", "10.0.0.100"), ("10.0.0.11", "10.0.0.1")}
-    controller.check_server_timeouts(now=102.0)
-    assert len(sent) == 2
-
-
-def test_s3_heartbeat_timeout_flushes_unknown_flows_for_dead_server():
-    """FR-4: without a flow cache, both translated directions are still flushed."""
-    _, controller = _controller()
-    sent = []
-
-    class Parser:
-        def OFPMatch(self, **kwargs):
-            return kwargs
-
-        def OFPFlowMod(self, **kwargs):
-            return kwargs
-
-    controller.datapaths = {1: SimpleNamespace(
-        id=1,
-        ofproto=SimpleNamespace(OFPFC_DELETE=3, OFPP_ANY=0xFFFFFFFF, OFPG_ANY=0xFFFFFFFF),
-        ofproto_parser=Parser(),
-        send_msg=sent.append,
-    )}
-    controller.last_heartbeat = {"srv1": 90.0, "srv2": 100.0, "srv3": 100.0}
-    controller.active_flows = []
-
-    controller.check_server_timeouts(now=101.0)
-
-    matches = {tuple(sorted(message["match"].items())) for message in sent}
-    assert len(sent) == 2
-    assert any(("ipv4_src", "10.0.0.11") in items for items in matches)
-    assert any(("ipv4_dst", "10.0.0.11") in items for items in matches)

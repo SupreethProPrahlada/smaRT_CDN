@@ -7,7 +7,10 @@ from mininet.log import setLogLevel
 import sys, os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config.settings import CLIENT_IPS, CLIENT_MACS, LOADSRC_IP, LOADSRC_MAC, SERVERS, OFP_CONTROLLER_PORT
+from config.settings import (
+    CLIENT_IPS, CLIENT_MACS, SERVERS, OFP_CONTROLLER_PORT, DETOUR_LINKS, TRAFFIC_HOST,
+    S1_DETOUR_PORT, S5_S1_PORT, S5_S2_PORT, S2_DETOUR_PORT, S2_TRAFFIC_PORT,
+)
 
 class SmartCDNTopo(Topo):
     def build(self):
@@ -15,7 +18,6 @@ class SmartCDNTopo(Topo):
         s2 = self.addSwitch('s2', protocols='OpenFlow13')
         s3 = self.addSwitch('s3', protocols='OpenFlow13')
         s4 = self.addSwitch('s4', protocols='OpenFlow13')
-        s5 = self.addSwitch('s5', protocols='OpenFlow13')
 
         for c_id, ip in CLIENT_IPS.items():
             self.addLink(self.addHost(c_id, ip=f"{ip}/24", mac=CLIENT_MACS[c_id]), s1, cls=TCLink, bw=100, delay='1ms')
@@ -27,9 +29,15 @@ class SmartCDNTopo(Topo):
         self.addLink(s1, s2, cls=TCLink, bw=100, delay='5ms')   # Primary
         self.addLink(s1, s3, cls=TCLink, bw=50, delay='20ms')   # Secondary
         self.addLink(s1, s4, cls=TCLink, bw=10, delay='50ms')   # Backup
-        self.addLink(s1, s5, cls=TCLink, bw=100, delay='7.5ms') # Detour leg 1
-        self.addLink(s5, s2, cls=TCLink, bw=100, delay='7.5ms') # Detour leg 2
-        self.addLink(self.addHost('loadsrc', ip=f'{LOADSRC_IP}/24', mac=LOADSRC_MAC), s1, cls=TCLink, bw=100, delay='1ms')
+
+        # Sprint 4 (Developer 2): detour switch s5 gives srv1 a second path, s1 -> s5 -> s2.
+        s5 = self.addSwitch('s5', protocols='OpenFlow13')
+        d1, d2 = DETOUR_LINKS['s1-s5'], DETOUR_LINKS['s5-s2']
+        self.addLink(s1, s5, port1=S1_DETOUR_PORT, port2=S5_S1_PORT, cls=TCLink, bw=d1['bw'], delay=f"{d1['delay_ms']}ms")
+        self.addLink(s5, s2, port1=S5_S2_PORT, port2=S2_DETOUR_PORT, cls=TCLink, bw=d2['bw'], delay=f"{d2['delay_ms']}ms")
+        # Congestion-generator host behind s2: its traffic loads the primary s1-s2 trunk.
+        bg = self.addHost(TRAFFIC_HOST['id'], ip=f"{TRAFFIC_HOST['ip']}/24", mac=TRAFFIC_HOST['mac'])
+        self.addLink(bg, s2, port2=S2_TRAFFIC_PORT, cls=TCLink, bw=100, delay='1ms')
 
 if __name__ == '__main__':
     setLogLevel('info')

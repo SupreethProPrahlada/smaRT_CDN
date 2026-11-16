@@ -4,7 +4,7 @@
 
 Test Plan ID: TP-SCDN-S12-001
 Project: Smart CDN (`smaRT_CDN`)
-Scope: Sprint 1–2 baseline plus Sprint 3–4 coverage assessment on `test/sprint-1-2-coverage`
+Scope: Sprint 1–4 implementation and coverage assessment, integrated on `main`
 Requirements baseline: Smart CDN SRS, Version 0.1 (Draft), supplied as `Smart_CDN_SRS_Agile_Plan.docx`
 Plan template/reference: `Smart_CDN_IEEE829_Test_Plan.docx`
 
@@ -239,8 +239,9 @@ Sprint 3/4 status by required behavior:
 | NFR-1/NFR-4/NFR-5 / TC21–TC22 performance | Three paired 8 MiB dynamic/static smoke runs recorded throughput and TTFB. | Exploratory measurements recorded; no normative threshold/sample-size in draft SRS |
 | Scenario harness / TC20 and setup artifacts | `tests/run_scenarios.py` and `tests/make_content.py`; scenario entrypoints exercised. | Smoke, failover, link-failure, and both congestion modes executed |
 
-Latest execution on 2026-11-16 after the audit fixes: `uv run pytest -q` reported
-**67 passed, 2 skipped** (exit 0). The two skips are the system placeholders
+Latest execution on 2026-11-16 after integrating the Developer 2 upload with the
+tester tooling: `uv run pytest -q` reported **79 passed, 2 skipped** (exit 0).
+The two skips are the system placeholders
 TC22 (multi-client comparison) and TC24 (all-down end-to-end); they do not count
 as passes. `uv run python -m compileall -q app config controller topology scripts
 tests` and `git diff --check` passed. A new runner test verified `PYTHONPATH` is

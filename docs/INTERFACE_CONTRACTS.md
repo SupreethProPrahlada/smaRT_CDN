@@ -11,14 +11,19 @@
 ## 2. Protocols
 - Streaming: TCP 8000 -> `GET <filename> <offset>\n` -> `OK <total> <remain>\n<binary chunks>`
 - Heartbeat: UDP 9000 -> `STATUS <id> <active_connections> <timestamp>\n`
-  - The controller does **not** bind a socket on 9000. Heartbeats arrive as
-    OpenFlow packet-in messages at the server access switch and are validated
-    against the server id / configured source IP. (SRS §3.1.4 says "TCP 9000";
-    the implemented transport is UDP and this contract is authoritative.)
 - Latency Probes: EtherType `0x88B5` every 1.0s, smoothed via EMA ($\alpha = 0.5$)
 
-## 3. Detour Path (s5)
-- Forward: s1 port 10 -> s5 port 1 -> s5 port 2 -> s2 port 3 -> srv1.
-- Reverse: srv1 -> s2 port 1 -> s2 port 3 -> s5 port 2 -> s5 port 1 -> s1 port 10
-  -> client access port. The controller installs both directions when the
-  detour is active and deletes them again on recovery (FR-6/FR-9/FR-10).
+## 3. Sprint 3-4 Additions (Developer 2)
+- Detour switch `s5`: s1 port 10 <-> s5 port 1, s5 port 2 <-> s2 port 3 (srv1's second path).
+- Congestion host `bg`: `10.0.0.20` / `00:00:00:00:00:20` on s2 port 4.
+- Detour probe: EtherType `0x88B5` with tag `srv1d`, sent out of s1 port 10 and returned by s2.
+- Server failover: a server with no valid heartbeat for 10 s is `DOWN`, and its NAT flows are deleted.
+- Resume: a client that has received N bytes reconnects and sends `GET <filename> <N>\n`.
+  - The server answers `OK <total> <total - N>\n` and the remaining bytes.
+  - The client rejects a different total.
+  - `ERR` replies are final, so they are not retried.
+- Server errors: `ERR Bad_Request`, `ERR Bad_Offset`, `ERR File_Not_Found <name>`.
+- `results/live_routes.json` adds:
+  - `srv1_path` (`primary` or `detour`);
+  - `paths.{primary,detour}` with `status`, `rtt_ms`, `utilization`, `background` (other traffic, 0-1);
+  - `flows[]` with `client`, `server`, `path`, `rate_mbps`.

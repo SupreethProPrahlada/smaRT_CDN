@@ -50,10 +50,11 @@ def get_recent_transfers():
     if not os.path.exists(CSV_FILE):
         return []
     try:
-        with open(CSV_FILE, 'r', encoding='utf-8') as f:
+        with open(CSV_FILE, 'r', encoding='utf-8', newline='') as f:
             rows = list(csv.DictReader(f))
             return rows[-3:]
-    except Exception:
+    except (OSError, csv.Error, UnicodeError) as exc:
+        print(f"{YELLOW}Could not read transfer log {CSV_FILE}: {exc}{RESET}")
         return []
 
 def render_dashboard():

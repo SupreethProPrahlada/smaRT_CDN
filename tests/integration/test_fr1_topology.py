@@ -3,14 +3,14 @@ import pytest
 
 @pytest.mark.integration
 def test_tc34_topology_builds_required_switches_hosts_and_trunks():
-    """TC34: topology declares all switches/hosts and retains shaped Sprint 1 trunks."""
+    """TC34 Sprint 1/4: topology declares s1-s5, six clients, three servers, bg and shaped trunks."""
     pytest.importorskip("mininet.topo")
     from topology.topo import SmartCDNTopo
 
     topo = SmartCDNTopo()
 
     assert set(topo.switches()) == {"s1", "s2", "s3", "s4", "s5"}
-    assert set(topo.hosts()) == {f"c{i}" for i in range(1, 7)} | {"srv1", "srv2", "srv3", "loadsrc"}
+    assert set(topo.hosts()) == {f"c{i}" for i in range(1, 7)} | {"srv1", "srv2", "srv3", "bg"}
     assert topo.nodeInfo("s1")["protocols"] == "OpenFlow13"
     links = {(src, dst): info for src, dst, info in topo.links(withInfo=True)}
     assert links[("s1", "s2")]["bw"] == 100
@@ -19,23 +19,28 @@ def test_tc34_topology_builds_required_switches_hosts_and_trunks():
     assert links[("s1", "s3")]["delay"] == "20ms"
     assert links[("s1", "s4")]["bw"] == 10
     assert links[("s1", "s4")]["delay"] == "50ms"
+    # Sprint 4 detour s1 -> s5 -> s2 on the ports the controller expects.
+    assert links[("s1", "s5")]["bw"] == 100 and links[("s1", "s5")]["delay"] == "10ms"
+    assert (links[("s1", "s5")]["port1"], links[("s1", "s5")]["port2"]) == (10, 1)
+    assert links[("s5", "s2")]["delay"] == "5ms"
+    assert (links[("s5", "s2")]["port1"], links[("s5", "s2")]["port2"]) == (2, 3)
 
 
 @pytest.mark.integration
 def test_s4_topology_adds_detour_and_congestion_source():
-    """Sprint 4 FR-9/FR-12: s5 detour and loadsrc attach to the primary edge."""
+    """Sprint 4 FR-9/FR-12: s5 detour and the congestion source attach to the primary edge."""
     pytest.importorskip("mininet.topo")
+    from config.settings import TRAFFIC_HOST
     from topology.topo import SmartCDNTopo
 
     topo = SmartCDNTopo()
 
     assert "s5" in topo.switches()
-    assert "loadsrc" in topo.hosts()
+    assert TRAFFIC_HOST["id"] in topo.hosts()
     links = {(src, dst): info for src, dst, info in topo.links(withInfo=True)}
     assert ("s1", "s5") in links
     assert ("s5", "s2") in links
-    assert ("loadsrc", "s1") in links
+    assert (TRAFFIC_HOST["id"], "s2") in links
     assert topo.port("s1", "s2") == (7, 2)
     assert topo.port("s1", "s5") == (10, 1)
     assert topo.port("s5", "s2") == (2, 3)
-    assert topo.port("s1", "loadsrc") == (11, 0)
