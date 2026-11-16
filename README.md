@@ -18,7 +18,7 @@ uses it without activation.
 # Smart CDN (Software-Defined Content Delivery Network)
 **Course:** Software Engineering 3K04 / 3M04 — McMaster University  
 **Team:** Supreeth Prahlada (Developer 1) · Shyam Sooraj (Developer 2) · Shreyansh Tandon (Tester)
-**Delivered Sprints:** Sprint 0, 1, 2, 3 and 4 (implemented on `test/sprint-1-2-coverage`)
+**Delivered Sprints:** Sprint 0, 1, 2, 3 and 4 (merged into `main`)
 ---
 ## 📖 Executive Summary
 Smart CDN is an intelligent, Software-Defined Content Delivery Network built on **OpenFlow 1.3**, the **Ryu SDN Controller**, and **Mininet**. 
@@ -225,6 +225,6 @@ smaRT_CDN/
 * **Developer 2 (Shyam Sooraj):** Sprints 3–4 — crash detection, byte-offset resume, traversal defence, detour switch s5, link-failure/recovery, congestion generator, route map and experiments. *(COMPLETED)*
 * **Tester (Shreyansh Tandon):** Test plan TP-SCDS-001, scenario runner, unit/integration coverage, live verification and defect log. *(COMPLETED; see `docs/test_plan.md`)*
 
-> **Branch note:** the Sprint 3–4 work is currently on `test/sprint-1-2-coverage`
-> and is **not yet merged into `main`**. Per the SRS Definition of Done, merge it
-> by pull request only after the regression suite passes.
+> **Branch note:** Sprint 3–4 work and the SRS/TP audit fixes are merged into
+> `main` after the regression suite passed. The `test/sprint-1-2-coverage`
+> branch is kept for history and further test work.
