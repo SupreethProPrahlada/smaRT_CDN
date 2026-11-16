@@ -20,7 +20,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-from config.settings import CONTENT_DIR, OFP_CONTROLLER_PORT, SERVERS  # noqa: E402
+from config.settings import CONTENT_DIR, OFP_CONTROLLER_PORT, SERVERS, CLIENT_IPS  # noqa: E402
 from scripts.content import generate_content  # noqa: E402
 
 
@@ -49,7 +49,7 @@ def start_controller(mode):
     if project_path not in python_path.split(os.pathsep):
         env["PYTHONPATH"] = os.pathsep.join(filter(None, (project_path, python_path)))
     process = subprocess.Popen(
-        [manager, "controller.cdn_controller"],
+        [manager, "--ofp-listen-host", "127.0.0.1", "controller.cdn_controller"],
         cwd=str(PROJECT_ROOT), env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -109,6 +109,7 @@ def run_scenario(name, size_mb=16, seed=1, mode="dynamic", duration=15, congesti
         raise RuntimeError("refusing to overwrite existing test content: {}".format(content_file))
     scratch = Path(tempfile.mkdtemp(prefix="smartcdn-{}-".format(run_id)))
     downloaded = Path("/tmp/client_downloads") / "c1_{}".format(filename)
+    download_paths = [downloaded]
     manifest = generate_content(scratch, size_mb * 1024 * 1024, seed, filename)
     shutil.copyfile(scratch / filename, content_file)
 
@@ -170,11 +171,38 @@ def run_scenario(name, size_mb=16, seed=1, mode="dynamic", duration=15, congesti
             time.sleep(2)
             output = _run_client(net.get("c1"), filename, manifest["sha256"], "c1", duration + 10)
             traffic.wait(timeout=duration + 5)
+        elif name == "concurrent":
+            processes = []
+            for client_id in CLIENT_IPS:
+                processes.append((client_id, net.get(client_id).popen([
+                    sys.executable, str(PROJECT_ROOT / "app" / "client.py"),
+                    "--id", client_id, "--file", filename, "--hash", manifest["sha256"],
+                ], cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)))
+            outputs = []
+            for client_id, process in processes:
+                client_output, _ = process.communicate(timeout=max(duration, 120))
+                if process.returncode != 0:
+                    raise RuntimeError("client {} exited {}: {}".format(
+                        client_id, process.returncode, client_output))
+                outputs.append(client_output)
+            output = "\n".join(outputs)
+            download_paths = [
+                Path("/tmp/client_downloads") / "{}_{}".format(client_id, filename)
+                for client_id in CLIENT_IPS
+            ]
         else:
             output = _run_client(net.get("c1"), filename, manifest["sha256"], "c1", duration)
 
-        if not downloaded.exists() or hashlib.sha256(downloaded.read_bytes()).hexdigest() != manifest["sha256"]:
-            raise RuntimeError("download missing or SHA-256 differs from generated source")
+        for download_path in download_paths:
+            if (
+                not download_path.exists()
+                or hashlib.sha256(download_path.read_bytes()).hexdigest() != manifest["sha256"]
+            ):
+                raise RuntimeError(
+                    "download missing or SHA-256 differs from generated source: {}".format(
+                        download_path
+                    )
+                )
         return {
             "run_id": run_id,
             "mode": mode,
@@ -208,7 +236,8 @@ def run_scenario(name, size_mb=16, seed=1, mode="dynamic", duration=15, congesti
                 controller.kill()
                 controller.wait(timeout=5)
         content_file.unlink(missing_ok=True)
-        downloaded.unlink(missing_ok=True)
+        for download_path in download_paths:
+            download_path.unlink(missing_ok=True)
         shutil.rmtree(scratch, ignore_errors=True)
 
 
@@ -238,7 +267,7 @@ def _latest_ttfb():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scenario", choices=("smoke", "failover", "link-failure", "congestion"))
+    parser.add_argument("scenario", choices=("smoke", "failover", "link-failure", "congestion", "concurrent"))
     parser.add_argument("--mode", choices=("dynamic", "static"), default=os.environ.get("CDN_MODE", "dynamic"))
     parser.add_argument("--size-mb", type=int, default=16)
     parser.add_argument("--duration", type=int, default=15)

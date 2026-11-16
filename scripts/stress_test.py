@@ -19,6 +19,7 @@ from config.settings import (
     CONTENT_PORT,
     CHUNK_SIZE,
     CLIENT_TRANSFERS_CSV,
+    CLIENT_TRANSFER_FIELDS,
 )
 
 results_lock = threading.Lock()
@@ -143,20 +144,7 @@ def log_to_csv():
         writer = csv.writer(csv_file)
 
         if write_header:
-            writer.writerow(
-                [
-                    "timestamp",
-                    "client_id",
-                    "target_ip",
-                    "filename",
-                    "size_bytes",
-                    "ttfb_ms",
-                    "duration_s",
-                    "throughput_mbps",
-                    "sha256_match",
-                    "status",
-                ]
-            )
+            writer.writerow(CLIENT_TRANSFER_FIELDS)
 
         timestamp = datetime.now().isoformat()
 
@@ -172,7 +160,6 @@ def log_to_csv():
                     round(result["duration"], 3),
                     round(result["mbps"], 2),
                     result["sha256_match"],
-                    result["status"],
                 ]
             )
 

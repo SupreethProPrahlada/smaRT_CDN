@@ -179,3 +179,32 @@ def test_tc09_heartbeat_timeout_marks_server_down_and_flushes_rules():
     } == {("10.0.0.1", "10.0.0.100"), ("10.0.0.11", "10.0.0.1")}
     controller.check_server_timeouts(now=102.0)
     assert len(sent) == 2
+
+
+def test_s3_heartbeat_timeout_flushes_unknown_flows_for_dead_server():
+    """FR-4: without a flow cache, both translated directions are still flushed."""
+    _, controller = _controller()
+    sent = []
+
+    class Parser:
+        def OFPMatch(self, **kwargs):
+            return kwargs
+
+        def OFPFlowMod(self, **kwargs):
+            return kwargs
+
+    controller.datapaths = {1: SimpleNamespace(
+        id=1,
+        ofproto=SimpleNamespace(OFPFC_DELETE=3, OFPP_ANY=0xFFFFFFFF, OFPG_ANY=0xFFFFFFFF),
+        ofproto_parser=Parser(),
+        send_msg=sent.append,
+    )}
+    controller.last_heartbeat = {"srv1": 90.0, "srv2": 100.0, "srv3": 100.0}
+    controller.active_flows = []
+
+    controller.check_server_timeouts(now=101.0)
+
+    matches = {tuple(sorted(message["match"].items())) for message in sent}
+    assert len(sent) == 2
+    assert any(("ipv4_src", "10.0.0.11") in items for items in matches)
+    assert any(("ipv4_dst", "10.0.0.11") in items for items in matches)

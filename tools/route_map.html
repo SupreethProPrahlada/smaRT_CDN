@@ -13,6 +13,8 @@
     .link { fill: none; stroke: #536273; stroke-width: 8; stroke-linecap: round; }
     .link.active { stroke: #40d68a; }
     .link.detour { stroke: #f3ac43; }
+    .link.warn { stroke: #f3ac43; }
+    .link.hot { stroke: #ff5c5c; }
     .link.down { stroke: #858d99; stroke-dasharray: 12 9; }
     .node { fill: #263548; stroke: #91a8c2; stroke-width: 2; }
     text { fill: #e6edf5; font-size: 14px; text-anchor: middle; }
@@ -29,7 +31,7 @@
   <section class="card">
     <svg viewBox="0 0 1000 390" role="img" aria-label="Smart CDN network topology">
       <path id="direct" class="link" d="M210 185 L470 185"/><path id="detour-a" class="link" d="M210 185 L360 310"/><path id="detour-b" class="link" d="M360 310 L470 185"/>
-      <path class="link" d="M470 185 L760 90"/><path class="link" d="M470 185 L760 190"/><path class="link" d="M470 185 L760 290"/>
+      <path id="link-srv1" class="link" d="M470 185 L760 90"/><path id="link-srv2" class="link" d="M470 185 L760 190"/><path id="link-srv3" class="link" d="M470 185 L760 290"/>
       <circle class="node" cx="110" cy="185" r="55"/><text x="110" y="180">Clients</text><text x="110" y="202">c1–c6</text>
       <circle class="node" cx="210" cy="185" r="38"/><text x="210" y="190">s1</text>
       <circle class="node" cx="360" cy="310" r="38"/><text x="360" y="315">s5</text>
@@ -43,17 +45,30 @@
   <section class="card"><h2>Server and path state</h2><table><thead><tr><th>Server</th><th>Status</th><th>RTT</th><th>Utilization</th><th>Active connections</th></tr></thead><tbody id="servers"></tbody></table><p id="updated" class="muted">No telemetry yet.</p></section>
 <script>
 const routeFile = '../results/live_routes.json';
+// SRS 3.1.1: green < 50%, orange >= 50%, red >= 80%, dashed grey = down/dead.
+function utilizationClass(server) {
+  if (!server || server.status !== 'UP') return 'down';
+  const utilization = Number(server.utilization || 0);
+  if (utilization >= 0.8) return 'hot';
+  if (utilization >= 0.5) return 'warn';
+  return 'active';
+}
 async function refresh() {
   try {
     const response = await fetch(`${routeFile}?t=${Date.now()}`, {cache: 'no-store'});
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const state = await response.json();
     const detour = Boolean(state.detour_active);
-    document.getElementById('direct').className = `link ${detour ? '' : 'active'}`;
+    const directUp = state.direct_link_up !== false;
+    document.getElementById('direct').className = `link ${directUp ? (detour ? 'hot' : 'active') : 'down'}`;
     document.getElementById('detour-a').className = `link ${detour ? 'detour' : ''}`;
     document.getElementById('detour-b').className = `link ${detour ? 'detour' : ''}`;
-    document.getElementById('mode').textContent = `Mode: ${state.cdn_mode || 'unknown'} · route: ${detour ? 's5 detour' : 'direct'}`;
-    document.getElementById('servers').innerHTML = Object.entries(state.servers || {}).map(([id, s]) =>
+    const servers = state.servers || {};
+    for (const id of ['srv1', 'srv2', 'srv3']) {
+      document.getElementById('link-' + id).className = `link ${utilizationClass(servers[id])}`;
+    }
+    document.getElementById('mode').textContent = `Mode: ${state.cdn_mode || 'unknown'} · route: ${detour ? 's5 detour' : 'direct'} · ${(state.routes || []).length} active VIP flow(s)`;
+    document.getElementById('servers').innerHTML = Object.entries(servers).map(([id, s]) =>
       `<tr><td>${id}</td><td class="${s.status === 'UP' ? 'up' : 'down'}">${s.status || 'UNKNOWN'}</td><td>${Number(s.rtt_ms || 0).toFixed(2)} ms</td><td>${(Number(s.utilization || 0) * 100).toFixed(1)}%</td><td>${Number(s.active_conns || 0)}</td></tr>`).join('');
     document.getElementById('updated').textContent = `Updated ${new Date(Number(state.timestamp) * 1000).toLocaleTimeString()}`;
     document.getElementById('error').textContent = '';

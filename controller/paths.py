@@ -19,3 +19,16 @@ def add_flow(datapath, priority, match, actions, idle_timeout=0):
     ofproto = datapath.ofproto
     inst = [datapath.ofproto_parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
     datapath.send_msg(datapath.ofproto_parser.OFPFlowMod(datapath=datapath, priority=priority, match=match, instructions=inst, idle_timeout=idle_timeout))
+
+
+def delete_flow(datapath, match):
+    """Delete every flow matching ``match`` on ``datapath`` (FR-6/FR-9/FR-10)."""
+    ofproto = datapath.ofproto
+    datapath.send_msg(datapath.ofproto_parser.OFPFlowMod(
+        datapath=datapath,
+        command=ofproto.OFPFC_DELETE,
+        out_port=ofproto.OFPP_ANY,
+        out_group=ofproto.OFPG_ANY,
+        match=match,
+        instructions=[],
+    ))

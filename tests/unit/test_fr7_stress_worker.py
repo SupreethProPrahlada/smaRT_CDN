@@ -48,3 +48,37 @@ def test_tc37_stress_worker_rejects_truncated_payload(monkeypatch):
     stress_module.download_worker(1, "file.bin", "127.0.0.1", 8000)
 
     assert stress_module.worker_results[-1]["success"] is False
+
+
+def test_fr8_stress_worker_csv_uses_shared_client_schema(monkeypatch, tmp_path):
+    """FR-8: the stress tester appends rows with exactly the client CSV schema."""
+    import csv
+
+    from config.settings import CLIENT_TRANSFER_FIELDS
+
+    path = tmp_path / "metrics.csv"
+    monkeypatch.setattr(stress_module, "CLIENT_TRANSFERS_CSV", str(path))
+    stress_module.worker_results.clear()
+    stress_module.worker_results.append({
+        "worker_id": 1,
+        "filename": "file.bin",
+        "vip": "10.0.0.100",
+        "bytes": 10,
+        "expected_bytes": 10,
+        "duration": 1.0,
+        "ttfb_ms": 2.0,
+        "mbps": 0.08,
+        "sha256": "0" * 64,
+        "sha256_match": True,
+        "success": True,
+        "status": "PASS",
+        "error": None,
+    })
+
+    stress_module.log_to_csv()
+
+    with path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        rows = list(reader)
+    assert reader.fieldnames == CLIENT_TRANSFER_FIELDS
+    assert len(rows) == 1 and rows[0]["client_id"] == "worker_1"

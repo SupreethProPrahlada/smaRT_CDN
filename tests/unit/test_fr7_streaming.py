@@ -71,6 +71,30 @@ def test_tc_s3_server_rejects_directory_traversal(monkeypatch, tmp_path):
     assert b"must not be served" not in response
 
 
+def test_s3_server_rejects_symlink_escape(monkeypatch, tmp_path):
+    """Sprint 3 security: a symlink resolving outside the content root is refused."""
+    content = tmp_path / "content"
+    content.mkdir()
+    outside = tmp_path / "secret.bin"
+    outside.write_bytes(b"must not be served")
+    (content / "link.bin").symlink_to(outside)
+    monkeypatch.setattr(server_module, "CONTENT_DIR", str(content))
+
+    left, right = socket.socketpair()
+    thread = threading.Thread(
+        target=ContentServer("srv1", "127.0.0.1").handle_client, args=(left, None)
+    )
+    thread.start()
+    right.sendall(b"GET link.bin 0\n")
+    right.shutdown(socket.SHUT_WR)
+    response = right.recv(256)
+    right.close()
+    thread.join(timeout=2)
+
+    assert response.startswith(b"ERR ")
+    assert b"must not be served" not in response
+
+
 def test_tc16_missing_file_is_not_reported_as_success(monkeypatch, tmp_path):
     """TC16 FR-7: a missing content file must not receive a success header."""
     monkeypatch.setattr(server_module, "CONTENT_DIR", str(tmp_path))

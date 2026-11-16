@@ -49,6 +49,18 @@ STATIC_MAPPING = {"c1": "srv1", "c4": "srv1", "c2": "srv2", "c5": "srv2", "c3": 
 LOG_INTERVAL = 5.0
 LIVE_ROUTES_JSON = "results/live_routes.json"
 CLIENT_TRANSFERS_CSV = "results/data/client-transfers.csv"
+# Single schema shared by app/client.py and scripts/stress_test.py (FR-8).
+CLIENT_TRANSFER_FIELDS = [
+    "timestamp",
+    "client_id",
+    "target_ip",
+    "filename",
+    "size_bytes",
+    "ttfb_ms",
+    "duration_s",
+    "throughput_mbps",
+    "sha256_match",
+]
 
 # Compatibility aliases
 VIP = VIP_IP

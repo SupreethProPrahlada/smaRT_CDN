@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import time
 
 import pytest
 
@@ -36,6 +37,9 @@ class FakeDatapath:
             OFPCML_NO_BUFFER=0xFFFF,
             OFPIT_APPLY_ACTIONS=4,
             OFPFC_MODIFY_STRICT=2,
+            OFPFC_DELETE=3,
+            OFPP_ANY=0xFFFFFFFF,
+            OFPG_ANY=0xFFFFFFFF,
             OFPPS_LINK_DOWN=1,
             OFPPR_MODIFY=1,
             OFPPR_DELETE=2,
@@ -190,3 +194,58 @@ def test_s4_link_status_event_switches_detour_and_recovers():
     assert controller.direct_link_up is True
     assert controller.detour_active is False
     assert dp.messages[-1].instructions[0].actions[-1] == ("output", 7, {})
+
+
+def test_s4_detour_keeps_srv1_return_path_bidirectional():
+    """FR-9: with the s1-s2 link down, srv1 replies must return through s5."""
+    controller = _controller()
+    s1, s2 = FakeDatapath(), FakeDatapath()
+    s2.id = 2
+    controller.datapaths = {1: s1, 2: s2}
+    controller.active_flows = [{
+        "match": {"ipv4_src": "10.0.0.1"},
+        "server_id": "srv1",
+        "client_ip": "10.0.0.1",
+        "client_port": 1,
+    }]
+
+    controller._set_detour(True)
+
+    s1_return = next(
+        msg for msg in s1.messages
+        if getattr(msg, "match", {}).get("in_port") == 10
+    )
+    assert s1_return.match["ipv4_dst"] == "10.0.0.1"
+    assert s1_return.instructions[0].actions[-1] == ("output", 1, {})
+    s2_return = next(
+        msg for msg in s2.messages
+        if getattr(msg, "match", {}).get("in_port") == 1
+    )
+    assert s2_return.instructions[0].actions[-1] == ("output", 3, {})
+
+    controller._set_detour(False)
+
+    assert s1.messages[-1].command == s1.ofproto.OFPFC_DELETE
+    assert s2.messages[-1].command == s2.ofproto.OFPFC_DELETE
+
+
+def test_tc22_flow_rule_installation_within_twenty_ms():
+    """TC22 NFR-1: a new VIP connection is routed well inside 20 ms."""
+    controller = _controller()
+    dp = FakeDatapath()
+    from ryu.lib.packet import ethernet, ipv4, packet, tcp
+
+    request = packet.Packet()
+    request.add_protocol(ethernet.ethernet(
+        dst="00:00:00:00:01:00", src="00:00:00:00:00:01", ethertype=0x0800
+    ))
+    request.add_protocol(ipv4.ipv4(src="10.0.0.1", dst="10.0.0.100", proto=6))
+    request.add_protocol(tcp.tcp(src_port=40000, dst_port=8000))
+    request.serialize()
+
+    start = time.perf_counter()
+    controller.packet_in_handler(_event(request.data, dp))
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+
+    assert dp.messages, "controller must install NAT rules for a new connection"
+    assert elapsed_ms < 20.0

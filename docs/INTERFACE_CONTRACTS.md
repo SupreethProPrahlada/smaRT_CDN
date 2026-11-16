@@ -11,4 +11,14 @@
 ## 2. Protocols
 - Streaming: TCP 8000 -> `GET <filename> <offset>\n` -> `OK <total> <remain>\n<binary chunks>`
 - Heartbeat: UDP 9000 -> `STATUS <id> <active_connections> <timestamp>\n`
+  - The controller does **not** bind a socket on 9000. Heartbeats arrive as
+    OpenFlow packet-in messages at the server access switch and are validated
+    against the server id / configured source IP. (SRS §3.1.4 says "TCP 9000";
+    the implemented transport is UDP and this contract is authoritative.)
 - Latency Probes: EtherType `0x88B5` every 1.0s, smoothed via EMA ($\alpha = 0.5$)
+
+## 3. Detour Path (s5)
+- Forward: s1 port 10 -> s5 port 1 -> s5 port 2 -> s2 port 3 -> srv1.
+- Reverse: srv1 -> s2 port 1 -> s2 port 3 -> s5 port 2 -> s5 port 1 -> s1 port 10
+  -> client access port. The controller installs both directions when the
+  detour is active and deletes them again on recovery (FR-6/FR-9/FR-10).

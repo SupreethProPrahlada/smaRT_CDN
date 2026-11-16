@@ -17,6 +17,7 @@ from config.settings import (
     CLIENT_RETRY_DELAY,
     CLIENT_DOWNLOAD_DIR,
     CLIENT_TRANSFERS_CSV,
+    CLIENT_TRANSFER_FIELDS,
 )
 
 
@@ -140,19 +141,7 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
     with open(CLIENT_TRANSFERS_CSV, "a", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         if write_header:
-            writer.writerow(
-                [
-                    "timestamp",
-                    "client_id",
-                    "target_ip",
-                    "filename",
-                    "size_bytes",
-                    "ttfb_ms",
-                    "duration_s",
-                    "throughput_mbps",
-                    "sha256_match",
-                ]
-            )
+            writer.writerow(CLIENT_TRANSFER_FIELDS)
 
         writer.writerow(
             [

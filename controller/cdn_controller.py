@@ -16,7 +16,7 @@ from config.settings import (
 from controller.paths import (
     DPID_S1, DPID_S2, DPID_S5, S1_TRUNK_PORTS, S1_DETOUR_PORT, S1_LOADSRC_PORT,
     S5_S1_PORT, S5_S2_PORT, S2_S5_PORT, SERVER_SWITCH_PORTS,
-    should_use_detour, add_flow,
+    should_use_detour, add_flow, delete_flow,
 )
 from controller.selector import ServerSelector
 
@@ -122,6 +122,9 @@ class SmartCDNController(app_manager.RyuApp):
                 matches.append(parser.OFPMatch(
                     eth_type=0x0800, ip_proto=6, ipv4_src=server_ip
                 ))
+                matches.append(parser.OFPMatch(
+                    eth_type=0x0800, ip_proto=6, ipv4_dst=server_ip
+                ))
             for match in matches:
                 datapath.send_msg(parser.OFPFlowMod(
                     datapath=datapath,
@@ -165,6 +168,66 @@ class SmartCDNController(app_manager.RyuApp):
                 instructions=instructions,
                 idle_timeout=60,
             ))
+        self._set_return_path(active)
+
+    def _set_return_path(self, active):
+        """Keep the srv1 return direction on s5 whenever the detour is active.
+
+        The normal reverse-NAT rule matches packets arriving on the direct
+        trunk (s2 -> s1).  When the s1-s2 link is down those packets arrive on
+        the s5 port instead, so a matching reverse rule must be installed on
+        s1 and on s2 for the flow to stay bidirectional (FR-9/FR-10).
+        """
+        datapath = self.datapaths.get(DPID_S1)
+        if datapath is None:
+            return
+        parser = datapath.ofproto_parser
+        for flow in self.active_flows:
+            if flow["server_id"] != "srv1" or "client_port" not in flow:
+                continue
+            match = parser.OFPMatch(
+                in_port=S1_DETOUR_PORT,
+                eth_type=0x0800,
+                ip_proto=6,
+                ipv4_src=SERVERS["srv1"]["ip"],
+                ipv4_dst=flow["client_ip"],
+                tcp_src=CONTENT_PORT,
+            )
+            if active:
+                add_flow(
+                    datapath,
+                    priority=100,
+                    match=match,
+                    actions=[
+                        parser.OFPActionSetField(ipv4_src=VIP_IP),
+                        parser.OFPActionSetField(eth_src=VIP_MAC),
+                        parser.OFPActionOutput(flow["client_port"]),
+                    ],
+                    idle_timeout=60,
+                )
+            else:
+                delete_flow(datapath, match)
+
+        server_datapath = self.datapaths.get(DPID_S2)
+        if server_datapath is None:
+            return
+        server_parser = server_datapath.ofproto_parser
+        return_match = server_parser.OFPMatch(
+            in_port=SERVER_SWITCH_PORTS[DPID_S2]["server_port"],
+            eth_type=0x0800,
+            ip_proto=6,
+            ipv4_src=SERVERS["srv1"]["ip"],
+            tcp_src=CONTENT_PORT,
+        )
+        if active:
+            add_flow(
+                server_datapath,
+                priority=100,
+                match=return_match,
+                actions=[server_parser.OFPActionOutput(S2_S5_PORT)],
+            )
+        else:
+            delete_flow(server_datapath, return_match)
 
     @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
     def port_status_handler(self, ev):
@@ -278,10 +341,14 @@ class SmartCDNController(app_manager.RyuApp):
                 "match": forward_match,
                 "server_id": srv["id"],
                 "client_ip": pkt_ip.src,
+                "client_port": in_port,
                 "created_at": time.time(),
             })
             add_flow(dp, priority=100, match=forward_match, actions=[parser.OFPActionSetField(ipv4_dst=srv['ip']), parser.OFPActionSetField(eth_dst=srv['mac']), parser.OFPActionOutput(out_port)], idle_timeout=60)
             add_flow(dp, priority=100, match=parser.OFPMatch(in_port=trunk, eth_type=0x0800, ip_proto=6, ipv4_src=srv['ip'], ipv4_dst=pkt_ip.src, tcp_src=CONTENT_PORT), actions=[parser.OFPActionSetField(ipv4_src=VIP_IP), parser.OFPActionSetField(eth_src=VIP_MAC), parser.OFPActionOutput(in_port)], idle_timeout=60)
+
+            if srv["id"] == "srv1" and self.detour_active:
+                self._set_return_path(True)
 
             dp.send_msg(parser.OFPPacketOut(datapath=dp, buffer_id=msg.buffer_id, in_port=in_port, actions=[parser.OFPActionSetField(ipv4_dst=srv['ip']), parser.OFPActionSetField(eth_dst=srv['mac']), parser.OFPActionOutput(out_port)], data=msg.data if msg.buffer_id == dp.ofproto.OFP_NO_BUFFER else None))
 
@@ -296,6 +363,14 @@ class SmartCDNController(app_manager.RyuApp):
                     'detour_active': self.detour_active,
                     'direct_link_up': self.direct_link_up,
                     'servers': self.server_telemetry,
+                    'routes': [
+                        {
+                            'client_ip': flow.get('client_ip'),
+                            'client_port': flow.get('client_port'),
+                            'server_id': flow.get('server_id'),
+                        }
+                        for flow in getattr(self, 'active_flows', [])
+                    ],
                 }, f, indent=2)
             os.replace(tmp_path, LIVE_ROUTES_JSON)
         except Exception as exc:

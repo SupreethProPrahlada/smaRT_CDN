@@ -36,21 +36,22 @@ This plan records baseline Sprint 1–2 findings and the Sprint 3–4 follow-up 
 
 5 Software Risk Issues
 
-- Ryu is not installed in the current environment; controller packet handlers and live export tests are conditionally skipped.
-- The manifest pins Python 3.9, but only Python 3.14.9 is available here. Unit results therefore do not establish compatibility with the declared runtime. Pytest is also not declared in `pyproject.toml`; the current host provides pytest 9.2.0.
-- Mininet and OVS commands are present, but no Ryu manager is available and non-interactive sudo is unavailable; live topology/controller tests cannot be run here.
-- The client accepts short responses as successful when `expected_hash` is omitted; a supplied hash is optional in the API/CLI.
-- The stress worker treats clean EOF as success without comparing received byte count with the advertised total or comparing its digest with a trusted expected digest.
-- The client assumes a response header exists; the server closes the connection without an error response for a missing file, producing an unhandled `IndexError` in the client.
-- The controller heartbeat handler checks that the UDP source IP matches the configured address for the named server. That handler is Ryu-dependent and its runtime behavior remains unverified in this environment. Heartbeat timeout detection and flow flushing are Sprint 3 features and are absent.
-- Probe forwarding needs live verification: the controller injects a probe toward each server switch, while that switch's probe rule outputs to the same trunk port the probe arrived on; no server-side echo responder is implemented.
-- The dashboard labels every logged transfer `PASS (100% Hash Match)` without inspecting the logged verification result, and labels the lowest-RTT server optimal even though dynamic selection uses three factors.
-- The client and stress tester append different CSV schemas to the same configured transfer-log path, so a shared log can have a mismatched header and rows.
-- Live-route JSON export writes directly to the destination and suppresses all exceptions; concurrent dashboard reads can see partial JSON and export failures are silent.
-- The all-servers-down selector path currently returns `srv1`; the SRS does not specify the required policy.
-- Selector normalization and tie-breaking are not specified numerically in the SRS.
-- Sprint 2 documentation claims `gaming`, `bulk_video`, and `balanced` policy profiles, but the current `controller/selector.py` has only the fixed weight map and no profile-selection API. Confirm whether those claims remain requirements.
-- `CDN_MODE`/profile activation for a running controller is not clearly wired: `DEFAULT_CDN_MODE` is fixed in settings and the controller constructs its selector from that constant.
+Initial Sprint 1–2 findings and their final status at the 2026-11-16 baseline:
+
+- **Resolved:** Ryu 4.34 and Python 3.9 are provisioned by `uv sync`; the controller integration cases now execute instead of skipping.
+- **Resolved:** `pytest` is declared in the `dev` dependency group and is no longer a host-only package.
+- **Resolved:** the client and stress tester now append the same nine-column CSV schema (`CLIENT_TRANSFER_FIELDS`).
+- **Resolved:** the client and stress worker reject truncated transfers even when no expected hash is supplied; the client handles `ERR` responses for missing files.
+- **Resolved:** live-route JSON export is atomic (`tmp` + `os.replace`) and failures are logged.
+- **Resolved:** the all-servers-down policy is the documented deterministic `srv1` fallback (FR-5 / README).
+- **Resolved:** `/`-prefixed, `..`, absolute and symlink-escaping paths are rejected by the content server.
+- **Resolved:** the heartbeat handler validates payload syntax, the server id and the matching configured source IP.
+- **Resolved:** the dashboard derives the verification badge from `sha256_match` and ignores DOWN replicas when choosing the lowest-RTT replica.
+- **Resolved:** stale `gaming` / `bulk_video` profile claims were removed from README and Sprint 2 notes; the balanced weight map is the only policy.
+- **Open (documentation):** the SRS calls port 9000 a TCP heartbeat listener, but the design uses UDP heartbeat frames delivered by OpenFlow packet-in. The SRS text should be corrected; the interface contract already says UDP.
+- **Open (documentation):** the SRS says the route map can be opened by double-click. Browsers block `fetch()` from `file://`, so serve the project root over HTTP.
+- **Open (acceptance):** NFR-4 (≥85 Mbps) is supported by live evidence (89.72 Mbps) but has no repeatable automated threshold test in this environment.
+- **Open (acceptance):** selector normalization/tie-breaking is still not stated numerically in the SRS; the implementation normalizes latency and load and uses raw utilization.
 
 6 Features to be Tested
 
@@ -67,11 +68,14 @@ This plan records baseline Sprint 1–2 findings and the Sprint 3–4 follow-up 
 
 7 Features not to be Tested
 
-- FR-6 congestion rerouting; FR-9 path failure migration; FR-10 path recovery; FR-12 congestion generator. These are Sprint 4 scope in the supplied SRS.
-- FR-4 crash detection/flow flushing and FR-7 byte-offset retry/resume or directory traversal defense. These are Sprint 3 scope.
-- NFR acceptance thresholds assigned to later sprints, physical-network performance, and third-party Ryu/OVS/Mininet internals.
-- Live dashboard rendering over a running controller, beyond the dashboard's testable CSV/numeric helpers.
-- Dynamic/static network performance comparison, which needs a live Mininet/Ryu environment and agreed comparison metrics.
+- Internal working of Ryu, Mininet, Open vSwitch, iperf/curl and Linux traffic
+  control (including HTB quantum warnings during topology startup).
+- Hardware-level performance and performance on physical (non-emulated) networks.
+- Browser rendering internals of the route map (only the file contract is
+  checked).
+- Statistical significance of the dynamic/static comparison; the SRS defines no
+  sample size.
+
 
 8 Approach
 
@@ -94,19 +98,28 @@ Suspend network tests if Ryu/OpenFlow connectivity is unavailable, Mininet/OVS c
 
 12 Remaining Test Tasks
 
-- Run the real Ryu controller packet-in, probe, port-stat, heartbeat, and JSON-export tests in a Python 3.9/Ryu environment.
-- Run the controller status-logging integration case and measure the configured 5-second cadence in that environment.
-- Run Mininet/OVS end-to-end checks for ARP/NAT and actual client downloads through VIP.
-- Run a live dynamic/static comparison and verify route choice under the approved mode-selection mechanism.
-- Clarify behavior for all servers unavailable, selector normalization/ties, missing content, and profile activation before acceptance.
-- Resolve the three client/transfer error-handling defects (truncated-transfer false success in both clients and missing-file client crash) in a separate implementation task; remove strict xfail markers only after regression tests pass.
-- Verify probe round-trip behavior in a live Mininet/Ryu topology; the current forwarding path appears not to return probe packets to the controller.
-- Verify TC10 against Ryu and restrict accepted heartbeat source IPs to each server's configured address.
-- The supplied test-plan document references `tests/run_scenarios.py` and `tests/make_content.py`; neither file is present in this checkout. Confirm whether they are expected in Sprint 1/2 or later.
+- Execute the official TP-SCDS-001 cases TC01–TC24 in one clean Mininet/OVS
+  regression and record per-case evidence in
+  [`TP-SCDS-001_TRACEABILITY.md`](TP-SCDS-001_TRACEABILITY.md).
+- Measure live cadence for the 5-second controller log and the 1-second probe /
+  port-stat loops in a long run.
+- Repeat the dynamic/static comparison across all six clients with a defined
+  sample size; the current six rows use only c1.
+- Add an automated NFR-4 throughput assertion (≥85 Mbps) to the concurrency
+  scenario once the host baseline is stable.
+- Confirm the SRS wording for the heartbeat transport (UDP packet-in versus the
+  document's "TCP 9000") and for opening the route map by double-click.
+- TC18 has a static HTML check only; a browser-driven telemetry render remains
+  NOT EXECUTED.
 
 13 Environmental Needs
 
-Unit: Python with pytest; pytest 9.2.0 is installed on this host but is not listed in `pyproject.toml`; no Mininet or root. Current execution uses Python 3.14.9 and pytest 9.2.0. Integration: declared Python 3.9 runtime, Ryu, Mininet, Open vSwitch/OpenFlow 1.3, and a safe approved privilege path. Current host has Mininet and `ovs-vsctl`, but lacks Python 3.9, Ryu, and `ryu-manager`; `sudo -n true` fails. Current test artifacts are written only under pytest temporary directories.
+Unit/integration: `uv sync` provisions Python 3.9.25, pytest 8.4.2, Ryu 4.34 and
+Mininet. The full suite (`uv run pytest -q`) runs without root. System scenarios
+additionally need Mininet, Open vSwitch/OpenFlow 1.3 and an approved sudo path;
+they create a disposable topology and refuse to run if `s1`–`s5` bridges already
+exist. Test artifacts are written under pytest temporary directories or
+`results/data/`.
 
 14 Staffing and Training Needs
 
@@ -115,18 +128,30 @@ Tester: Shreyansh Tandon. Developers: Supreeth Prahalada and Shyam Sooraj. Proje
 15 Responsibilities
 
 - Shreyansh Tandon (Tester): test design, execution, evidence, defect reporting, and status reconciliation.
-- Supreeth Prahalada (Developer): clarify Sprint 1-2 implementation and support defect diagnosis.
+- Supreeth Prahalada (Developer): clarify implementation and support defect diagnosis.
 - Shyam Sooraj (Developer): review/clarify implementation and support defect diagnosis.
 - Project Guide: [Name], review/approval.
 - Supervisor: [Name], review/approval.
 
 16 Schedule
 
-Phase 1 — Requirements/code review and case design: completed before implementation of this test suite. Phase 2 — Unit test authoring: completed for available Sprint 1-2 behaviors. Phase 3 — Unit execution: performed on current host. Phase 4 — Ryu/Mininet integration and full-system execution: deferred until required runtime and privilege environment is available. Phase 5 — stakeholder clarification, defect resolution, and final acceptance: remaining.
+Phase 1 — Requirements/code review and case design: completed. Phase 2 — Unit and
+integration test authoring: completed for Sprints 1–4. Phase 3 — Unit and
+integration execution: completed on the project Python 3.9 environment. Phase 4 —
+live Mininet scenarios: executed for smoke, failover, link failure/recovery and
+both congestion modes; the six-client concurrent scenario was added for TC05 and
+remains to be re-run. Phase 5 — official TC01–TC24 regression, NFR-4 automation
+and final acceptance: remaining.
 
 17 Planning Risks and Contingencies
 
-The SRS is a draft for the larger system and assigns some behaviors to later sprints; this plan limits claims to Sprints 1-2. If test runtime dependencies cannot be installed or privileges approved, retain integration cases as NOT EXECUTED. If expected behavior is unclear, preserve the open question and do not encode an invented acceptance rule. Where test evidence exposes a code defect, preserve the failing regression as strict xfail and report it for a separate fix.
+The SRS is a draft; this report limits claims to what was actually executed.
+Skipped or environment-blocked cases stay NOT EXECUTED and are not passes. Where
+the SRS is ambiguous (normalization, heartbeat transport, route-map launch), the
+question is preserved rather than an invented acceptance rule. Fixed random
+seeds, disposable topologies and archived CSV evidence reduce run-to-run
+variation. Regressions that expose a defect are kept as failing tests until the
+product fix lands.
 
 18 Test Case Specification
 
@@ -214,7 +239,17 @@ Sprint 3/4 status by required behavior:
 | NFR-1/NFR-4/NFR-5 / TC21–TC22 performance | Three paired 8 MiB dynamic/static smoke runs recorded throughput and TTFB. | Exploratory measurements recorded; no normative threshold/sample-size in draft SRS |
 | Scenario harness / TC20 and setup artifacts | `tests/run_scenarios.py` and `tests/make_content.py`; scenario entrypoints exercised. | Smoke, failover, link-failure, and both congestion modes executed |
 
-Latest execution on 2026-11-16: `PYTHONPATH=. uv run pytest -q` reported **61 passed, 2 skipped** (exit 0); the skips are Ryu-conditional tests and do not count as passes. `uv run python -m compileall -q app config controller topology scripts tests` and `git diff --check` passed. A new runner test verified `PYTHONPATH` is set so Ryu can import the controller under sudo; its initial failure reproduced the controller startup error, and it passed after the runner fix.
+Latest execution on 2026-11-16 after the audit fixes: `uv run pytest -q` reported
+**67 passed, 2 skipped** (exit 0). The two skips are the system placeholders
+TC22 (multi-client comparison) and TC24 (all-down end-to-end); they do not count
+as passes. `uv run python -m compileall -q app config controller topology scripts
+tests` and `git diff --check` passed. A new runner test verified `PYTHONPATH` is
+set so Ryu can import the controller under sudo; its initial failure reproduced
+the controller startup error, and it passed after the runner fix. Additions in
+this audit: a six-client `concurrent` scenario (official TC05), bidirectional
+detour return rules for a sustained s1-s2 outage (FR-9), one shared CSV schema
+for the client and stress tester (FR-8), NFR-1/NFR-5 timing assertions (TC22),
+and route-map colour-band checks (TC18).
 
 Live Mininet runs completed with approved sudo. Smoke: 2 MiB, SHA-256 passed, 62.40 Mbps. Failover: srv1 terminated during a 32 MiB download; client completed with matching SHA-256 in 16.94 s (15.85 Mbps). Link failure/recovery: s1-s2 down for one second during a 16 MiB download, then restored; transfer completed with matching SHA-256 in 3.155 s (42.55 Mbps). Congestion: 16 MiB download completed with matching SHA-256 under both random mode (seed 42; 89.72 Mbps) and adaptive mode (89.77 Mbps). Mininet emitted repeated HTB quantum-size warnings; no scenario reported command failure.
 
