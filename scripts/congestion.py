@@ -2,19 +2,19 @@
 
 Two modes are available:
 
-* ``iperf`` (default): run on the ``loadsrc`` host behind s2 and send
+* ``iperf`` (default): run on the ``bg`` host behind s2 and send
   constant-rate UDP to a client sink, so the traffic crosses srv1's primary
   trunk (s1-s2) without touching srv1's own link. The controller sees this
   "other traffic" on the primary path and moves srv1 flows to the detour s5.
 
     mininet> c6 iperf -s -u &
-    mininet> loadsrc python3 scripts/congestion.py --target 10.0.0.6 --mbps 90 --seconds 30
+    mininet> bg python3 scripts/congestion.py --target 10.0.0.6 --mbps 90 --seconds 30
 
 * ``adaptive`` / ``random``: send UDP packets directly and vary the rate from
   the controller's exported srv1 utilisation (``results/live_routes.json``).
   ``random`` is reproducible for a fixed ``--seed``.
 
-    mininet> loadsrc python3 scripts/congestion.py --mode random --seed 42 \
+    mininet> bg python3 scripts/congestion.py --mode random --seed 42 \
         --target 10.0.0.6 --port 9001 --duration 30
 """
 

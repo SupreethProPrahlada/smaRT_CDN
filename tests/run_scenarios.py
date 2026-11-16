@@ -20,7 +20,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
-from config.settings import CONTENT_DIR, OFP_CONTROLLER_PORT, SERVERS, CLIENT_IPS  # noqa: E402
+from config.settings import (  # noqa: E402
+    CONTENT_DIR, OFP_CONTROLLER_PORT, SERVERS, CLIENT_IPS, TRAFFIC_HOST,
+)
 from scripts.content import generate_content  # noqa: E402
 
 
@@ -163,7 +165,7 @@ def run_scenario(name, size_mb=16, seed=1, mode="dynamic", duration=15, congesti
             if client_proc.returncode != 0:
                 raise RuntimeError("link-failure client failed: {}".format(output))
         elif name == "congestion":
-            traffic = net.get("loadsrc").popen([
+            traffic = net.get(TRAFFIC_HOST["id"]).popen([
                 sys.executable, str(PROJECT_ROOT / "scripts" / "congestion.py"),
                 "--mode", congestion_mode, "--duration", str(duration), "--seed", str(seed),
                 "--telemetry", str(PROJECT_ROOT / "results" / "live_routes.json"),

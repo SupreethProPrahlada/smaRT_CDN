@@ -17,8 +17,8 @@ step named by the case is missing; **NOT EXECUTED** = no run yet.
 | TC01 | Binary payloads created in `content/` | `tests/make_content.py` + `scripts/content.py`; `test_s3_content_generator_writes_repeatable_bytes_and_manifest`; every scenario generates deterministic content + manifest | PASS |
 | TC02 | c1–c6, loadsrc (c7), srv1–srv3, s1–s5 start | `test_tc34_topology_builds_required_switches_hosts_and_trunks`, `test_s4_topology_adds_detour_and_congestion_source`; topology started in every live scenario | PASS (declaration + live startup) |
 | TC03 | Ports 6653 and 9000 reachable | `tests/run_scenarios.start_controller` waits for 6653. **9000 is UDP heartbeat traffic delivered by switch packet-in, not a bound socket**, so the case as written cannot pass. Reword required. | PARTIAL / SRS–implementation mismatch |
-| TC04 | Single download, checksum OK | `tests/run_scenarios.py smoke`; `results/data/client-transfers.csv` rows with `sha256_match=True` (62.40 Mbps smoke run) | PASS |
-| TC05 | Six simultaneous downloads, checksum OK | New `tests/run_scenarios.py concurrent` drives c1–c6 in parallel and verifies all six digests. Harness added; run with `sudo -E .venv/bin/python tests/run_scenarios.py concurrent`. | NOT EXECUTED (ready) |
+| TC04 | Single download, checksum OK | `tests/run_scenarios.py smoke`; live run 8ac206a7b4 completed 16 MiB at 90.07 Mbps; SHA-256 matched | PASS (live, 2026-11-16) |
+| TC05 | Six simultaneous downloads, checksum OK | Live `concurrent --size-mb 8 --duration 60`; CSV records c1–c6 all have `sha256_match=True`; the six-client harness verified each output digest | PASS (live, 2026-11-16) |
 | TC06 | All three servers healthy | `test_tc08_heartbeat_datagram_contract`, `test_tc09_valid_heartbeat_updates_known_server_load`; live telemetry shows srv1–srv3 UP | PASS |
 | TC07 | New connections go to least-loaded healthy server | `test_tc11_numeric_dynamic_selection`, `test_tc12_single_healthy_server_selected`; controller `[Route Decision]` logs | PASS (unit + live route) |
 | TC08 | Fixed server assignment used | `test_tc20_static_client_mapping`, `test_tc21_dynamic_and_static_mode_instances`; `CDN_MODE=static` experiment rows | PASS |
@@ -33,8 +33,8 @@ step named by the case is missing; **NOT EXECUTED** = no run yet.
 | TC17 | RTT/utilization/state logged every 5 s | Constant + `test_tc39_controller_status_log_contains_telemetry`; live 5 s cadence not timed | PARTIAL |
 | TC18 | Route colours/decision update every second | `tools/route_map.html`; `test_tc18_route_map_refreshes_and_colours_links_by_load`; browser render not exercised | PARTIAL |
 | TC19 | Rows appended to `results/data/experiments.csv` | `test_s4_experiment_results_append_dynamic_and_static_rows_once`, `test_s4_comparison_runs_scenario_in_both_explicit_modes`; live file `results/data/experiments-live-20261116.csv` | PASS (exploratory) |
-| TC20 | All scenarios run and report generated | Runner supports smoke, failover, link-failure, congestion and concurrent; the first four ran live. No single all-in-one run and the concurrent case is still pending. | PARTIAL |
-| TC21 | Single download ≥85 Mbps on clean 100 Mbps link | Live row: 89.72 Mbps; experiments mean 84.27 Mbps. No automated threshold assertion (host-dependent). | PARTIAL (evidence, not regression) |
+| TC20 | All scenarios run and report generated | One approved-root batch executed smoke, failover, link-failure, random congestion (seed 1), and concurrent; individual JSON outputs are in `/tmp/opencode/live/*.log`. No consolidated report generator was run. | PARTIAL |
+| TC21 | Single download ≥85 Mbps on clean 100 Mbps link | Smoke measured 90.07 Mbps on this run; failover 15.88, link-failure 46.69, congestion 43.45 Mbps. One clean-link sample exceeds threshold; no automated threshold assertion or repeatability evidence. | PARTIAL (single exploratory sample) |
 | TC22 | Flow rules <20 ms; JSON export <50 ms | `test_tc22_flow_rule_installation_within_twenty_ms`; `test_tc17_json_export_contains_current_mode_and_servers` now asserts <50 ms | PASS (in-process proxy; live controller timing not instrumented) |
 | TC23 | `../` rejected; only content dir served | `test_tc_s3_server_rejects_directory_traversal`, `test_tc16_missing_file_is_not_reported_as_success`; network-level attack not executed | PASS (unit) |
 | TC24 | Bad source/syntax heartbeat ignored | `test_tc10_malformed_and_unknown_heartbeats_are_ignored` (bad syntax, unknown id, wrong source IP, negative count, non-numeric time, extra token); live forged datagram not executed | PASS (integration) |
@@ -53,7 +53,7 @@ step named by the case is missing; **NOT EXECUTED** = no run yet.
 uv sync
 uv run pytest -q                       # 79 passed, 2 skipped at this baseline
 sudo -E .venv/bin/python tests/run_scenarios.py smoke
-sudo -E .venv/bin/python tests/run_scenarios.py concurrent
+sudo -E .venv/bin/python tests/run_scenarios.py concurrent --size-mb 8 --duration 60
 ```
 
 The two skipped tests are the end-to-end placeholders TC22 (multi-client
