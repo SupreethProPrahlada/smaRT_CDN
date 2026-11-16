@@ -42,6 +42,35 @@ def test_tc15_empty_file_stream(monkeypatch, tmp_path):
     assert response == b"OK 0 0\n"
 
 
+def test_tc_s3_server_resumes_from_requested_byte_offset(monkeypatch, tmp_path):
+    """Sprint 3 FR-7: server returns only bytes at/after the requested offset."""
+    payload = b"0123456789"
+    response = _request(
+        monkeypatch,
+        tmp_path,
+        b"GET payload.bin 4\n",
+        payload=payload,
+    )
+
+    header, body = response.split(b"\n", 1)
+    assert header == b"OK 10 6"
+    assert body == b"456789"
+
+
+def test_tc_s3_server_rejects_directory_traversal(monkeypatch, tmp_path):
+    """Sprint 3 security: traversal syntax is rejected, not normalized."""
+    response = _request(
+        monkeypatch,
+        tmp_path,
+        b"GET ../payload.bin 0\n",
+        filename="payload.bin",
+        payload=b"must not be served",
+    )
+
+    assert response.startswith(b"ERR ")
+    assert b"must not be served" not in response
+
+
 def test_tc16_missing_file_is_not_reported_as_success(monkeypatch, tmp_path):
     """TC16 FR-7: a missing content file must not receive a success header."""
     monkeypatch.setattr(server_module, "CONTENT_DIR", str(tmp_path))

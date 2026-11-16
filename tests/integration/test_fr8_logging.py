@@ -15,6 +15,8 @@ def test_tc17_json_export_contains_current_mode_and_servers(monkeypatch, tmp_pat
 
     controller = object.__new__(SmartCDNController)
     controller.selector = ServerSelector(cdn_mode="dynamic")
+    controller.detour_active = True
+    controller.direct_link_up = True
     controller.server_telemetry = {
         "srv1": {"status": "UP", "rtt_ms": 10.0, "utilization": 0.25, "active_conns": 2}
     }
@@ -25,6 +27,7 @@ def test_tc17_json_export_contains_current_mode_and_servers(monkeypatch, tmp_pat
 
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["cdn_mode"] == "dynamic"
+    assert payload["detour_active"] is True
     assert payload["servers"]["srv1"]["active_conns"] == 2
     assert isinstance(payload["timestamp"], (int, float))
 

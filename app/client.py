@@ -13,6 +13,8 @@ from config.settings import (
     VIP_IP,
     CONTENT_PORT,
     CHUNK_SIZE,
+    MAX_RETRIES,
+    CLIENT_RETRY_DELAY,
     CLIENT_DOWNLOAD_DIR,
     CLIENT_TRANSFERS_CSV,
 )
@@ -25,93 +27,104 @@ def download(client_id, filename, expected_hash=None, target_ip=VIP_IP, port=CON
     start = time.time()
     ttfb = 0.0
     received = 0
+    total_bytes = None
     duration = 0.0
     mbps = 0.0
     hash_match = None
     status = "FAIL"
     error_message = None
     hasher = hashlib.sha256()
+    retries = 0
 
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if hasattr(sock, "settimeout"):
-            sock.settimeout(15)
-        sock.connect((target_ip, port))
-        try:
-            sock.sendall(f"GET {filename} 0\n".encode())
-
-            header_buffer = b""
-            while b"\n" not in header_buffer:
-                chunk = sock.recv(1024)
-                if not chunk:
-                    raise ConnectionError("server closed before sending a response")
-                header_buffer += chunk
-
-            ttfb = (time.time() - start) * 1000.0
-            header, _, data = header_buffer.partition(b"\n")
-            parts = header.decode(errors="replace").split()
-
-            if not parts or parts[0] != "OK":
-                message = " ".join(parts[1:]) if parts else "empty response"
-                raise RuntimeError(f"server error: {message}")
-
-            if len(parts) != 3:
-                raise RuntimeError("invalid success header")
-
+    with open(out_path, "wb") as output_file:
+        while total_bytes is None or received < total_bytes:
+            sock = None
             try:
-                total_bytes = int(parts[1])
-                expected_bytes = int(parts[2])
-            except ValueError as exc:
-                raise RuntimeError("invalid byte count in server header") from exc
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                if hasattr(sock, "settimeout"):
+                    sock.settimeout(15)
+                sock.connect((target_ip, port))
+                sock.sendall(f"GET {filename} {received}\n".encode())
 
-            if total_bytes < 0 or expected_bytes < 0 or expected_bytes > total_bytes:
-                raise RuntimeError("invalid byte count in server header")
+                header_buffer = b""
+                while b"\n" not in header_buffer:
+                    chunk = sock.recv(1024)
+                    if not chunk:
+                        raise ConnectionError("server closed before sending a response")
+                    header_buffer += chunk
+                    if len(header_buffer) > 4096:
+                        raise RuntimeError("response header is too large")
 
-            if len(data) > expected_bytes:
-                raise RuntimeError("server sent more data than advertised")
+                if not ttfb:
+                    ttfb = (time.time() - start) * 1000.0
+                header, _, data = header_buffer.partition(b"\n")
+                parts = header.decode(errors="replace").split()
 
-            with open(out_path, "wb") as output_file:
+                if not parts or parts[0] != "OK":
+                    message = " ".join(parts[1:]) if parts else "empty response"
+                    raise RuntimeError(f"server error: {message}")
+                if len(parts) != 3:
+                    raise RuntimeError("invalid success header")
+                try:
+                    reported_total, remaining = int(parts[1]), int(parts[2])
+                except ValueError as exc:
+                    raise RuntimeError("invalid byte count in server header") from exc
+
+                if reported_total < 0 or remaining < 0 or received + remaining != reported_total:
+                    raise RuntimeError("invalid byte count in server header")
+                if total_bytes is not None and total_bytes != reported_total:
+                    raise RuntimeError("server changed total size during resume")
+                total_bytes = reported_total
+                if len(data) > remaining:
+                    raise RuntimeError("server sent more data than advertised")
+
                 if data:
                     output_file.write(data)
                     hasher.update(data)
                     received += len(data)
-
-                while received < expected_bytes:
-                    chunk = sock.recv(min(CHUNK_SIZE, expected_bytes - received))
+                while received < total_bytes:
+                    chunk = sock.recv(min(CHUNK_SIZE, total_bytes - received))
                     if not chunk:
-                        break
+                        raise ConnectionError(
+                            f"incomplete download: received {received} of {total_bytes} bytes"
+                        )
                     output_file.write(chunk)
                     hasher.update(chunk)
                     received += len(chunk)
+                output_file.flush()
+            except (OSError, ConnectionError) as exc:
+                error_message = str(exc)
+                if retries >= MAX_RETRIES:
+                    break
+                retries += 1
+                time.sleep(CLIENT_RETRY_DELAY)
+            except RuntimeError as exc:
+                error_message = str(exc)
+                break
+            finally:
+                if sock is not None:
+                    sock.close()
 
-            duration = time.time() - start
-            mbps = (received * 8) / (duration * 1_000_000) if duration > 0 else 0.0
+    duration = time.time() - start
+    mbps = (received * 8) / (duration * 1_000_000) if duration > 0 else 0.0
+    complete = total_bytes is not None and received == total_bytes
+    if expected_hash is not None:
+        hash_match = complete and hasher.hexdigest().lower() == expected_hash.lower()
 
-            complete = received == expected_bytes
-            if expected_hash is not None:
-                hash_match = hasher.hexdigest().lower() == expected_hash.lower()
-
-            if not complete:
-                hash_match = False
-                status = "FAIL"
-                error_message = (
-                    f"incomplete download: received {received} of "
-                    f"{expected_bytes} bytes"
-                )
-            elif expected_hash is None:
-                status = "UNVERIFIED"
-            elif hash_match:
-                status = "PASS"
-            else:
-                status = "FAIL"
-                error_message = "SHA-256 hash mismatch"
-
-        finally:
-            sock.close()
-    except (OSError, RuntimeError, ConnectionError) as exc:
-        duration = time.time() - start
-        mbps = (received * 8) / (duration * 1_000_000) if duration > 0 else 0.0
-        error_message = str(exc)
+    if not complete:
+        hash_match = False
+        status = "FAIL"
+        if error_message is None:
+            error_message = f"incomplete download: received {received} of {total_bytes or 0} bytes"
+    elif expected_hash is None:
+        status = "UNVERIFIED"
+        error_message = None
+    elif hash_match:
+        status = "PASS"
+        error_message = None
+    else:
+        status = "FAIL"
+        error_message = "SHA-256 hash mismatch"
 
     if error_message:
         print(f"[{client_id}] Download FAIL: {error_message}")

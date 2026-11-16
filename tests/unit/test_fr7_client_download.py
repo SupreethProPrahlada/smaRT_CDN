@@ -59,11 +59,55 @@ def test_tc31_client_hash_mismatch_is_reported(monkeypatch, tmp_path, capsys):
     assert "FAIL" in capsys.readouterr().out
 
 
+def test_tc_s3_client_retries_from_last_written_byte(monkeypatch, tmp_path, capsys):
+    """Sprint 3 FR-7: resume retries request precisely the persisted offset."""
+    payload = b"0123456789"
+    first = FakeStreamSocket([b"OK 10 10\n0123", b""])
+    second = FakeStreamSocket([b"OK 10 6\n456789"])
+    sockets = iter((first, second))
+    delays = []
+    _client_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(client_module.socket, "socket", lambda *args: next(sockets))
+    monkeypatch.setattr(client_module.time, "sleep", delays.append)
+
+    client_module.download(
+        "c3", "resume.bin", hashlib.sha256(payload).hexdigest(), "127.0.0.1", 8123
+    )
+
+    assert first.request == b"GET resume.bin 0\n"
+    assert second.request == b"GET resume.bin 4\n"
+    assert delays == [1.0]
+    assert (tmp_path / "downloads" / "c3_resume.bin").read_bytes() == payload
+    assert "PASS" in capsys.readouterr().out
+
+
+def test_tc_s3_client_stops_after_twelve_retries(monkeypatch, tmp_path):
+    """Sprint 3 FR-7: retry count is bounded to twelve reconnects."""
+    sockets = []
+    delays = []
+
+    def make_socket(*_args):
+        response = b"OK 8 8\nx" if not sockets else b"OK 8 7\n"
+        sock = FakeStreamSocket([response, b""])
+        sockets.append(sock)
+        return sock
+
+    _client_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(client_module.socket, "socket", make_socket)
+    monkeypatch.setattr(client_module.time, "sleep", delays.append)
+
+    client_module.download("c3", "retry.bin", None, "127.0.0.1", 8123)
+
+    assert len(sockets) == 13
+    assert delays == [1.0] * 12
+
+
 def test_tc32_client_rejects_truncated_payload_without_expected_hash(monkeypatch, tmp_path, capsys):
     """TC32 FR-7: truncated transfer must not be reported successful without a supplied hash."""
     sock = FakeStreamSocket([b"OK 8 8\nabcd", b""])
     _client_paths(monkeypatch, tmp_path)
     monkeypatch.setattr(client_module.socket, "socket", lambda *args: sock)
+    monkeypatch.setattr(client_module.time, "sleep", lambda _seconds: None)
 
     client_module.download("c3", "partial.bin", None, "127.0.0.1", 8123)
 
@@ -78,6 +122,7 @@ def test_tc41_client_handles_missing_file_response(monkeypatch, tmp_path):
     sock = FakeStreamSocket([b""])
     _client_paths(monkeypatch, tmp_path)
     monkeypatch.setattr(client_module.socket, "socket", lambda *args: sock)
+    monkeypatch.setattr(client_module.time, "sleep", lambda _seconds: None)
 
     client_module.download("c5", "missing.bin", None, "127.0.0.1", 8123)
 

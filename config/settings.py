@@ -13,6 +13,8 @@ IP_PREFIX = "10.0.0.0/24"
 
 CLIENT_IPS = {f"c{i}": f"10.0.0.{i}" for i in range(1, 7)}
 CLIENT_MACS = {f"c{i}": f"00:00:00:00:00:0{i}" for i in range(1, 7)}
+LOADSRC_IP = "10.0.0.7"
+LOADSRC_MAC = "00:00:00:00:00:07"
 
 SERVERS = {
     "srv1": {"id": "srv1", "ip": "10.0.0.11", "mac": "00:00:00:00:00:11", "switch": "s2", "capacity_mbps": 100, "delay_ms": 5},
@@ -31,7 +33,12 @@ EMA_ALPHA = 0.5
 STATS_INTERVAL = 1.0
 
 HEARTBEAT_INTERVAL = 2.0
+HEARTBEAT_TIMEOUT = 10.0
+DETOUR_RTT_INCREASE_MS = 50.0
+PRIMARY_RTT_BASELINE_MS = 10.0
 CHUNK_SIZE = 65536
+MAX_RETRIES = 12
+CLIENT_RETRY_DELAY = 1.0
 CONTENT_DIR = "/tmp/cdn_content"
 CLIENT_DOWNLOAD_DIR = "/tmp/client_downloads"
 

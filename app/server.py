@@ -66,7 +66,16 @@ class ContentServer:
                 sock.sendall(b"ERR Bad_Request\n")
                 return
 
-            filename = os.path.basename(parts[1])
+            filename = parts[1]
+            if (
+                filename in (".", "..")
+                or os.path.basename(filename) != filename
+                or "/" in filename
+                or "\\" in filename
+                or os.path.isabs(filename)
+            ):
+                sock.sendall(b"ERR Bad_Request\n")
+                return
 
             try:
                 offset = int(parts[2])
@@ -78,7 +87,11 @@ class ContentServer:
                 sock.sendall(b"ERR Bad_Offset\n")
                 return
 
-            path = os.path.join(CONTENT_DIR, filename)
+            content_root = os.path.realpath(CONTENT_DIR)
+            path = os.path.realpath(os.path.join(content_root, filename))
+            if os.path.commonpath((content_root, path)) != content_root:
+                sock.sendall(b"ERR Bad_Request\n")
+                return
 
             if not os.path.isfile(path):
                 sock.sendall(f"ERR File_Not_Found {filename}\n".encode())

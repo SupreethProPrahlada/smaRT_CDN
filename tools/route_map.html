@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart CDN Route Map</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; background: #10151d; color: #e6edf5; }
+    body { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    header { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+    .card { border: 1px solid #344151; border-radius: 12px; background: #171f2a; padding: 1rem; }
+    svg { width: 100%; height: auto; min-height: 320px; }
+    .link { fill: none; stroke: #536273; stroke-width: 8; stroke-linecap: round; }
+    .link.active { stroke: #40d68a; }
+    .link.detour { stroke: #f3ac43; }
+    .link.down { stroke: #858d99; stroke-dasharray: 12 9; }
+    .node { fill: #263548; stroke: #91a8c2; stroke-width: 2; }
+    text { fill: #e6edf5; font-size: 14px; text-anchor: middle; }
+    .muted { color: #aebccc; }
+    #error { color: #ff8585; min-height: 1.5em; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: .55rem; text-align: left; border-bottom: 1px solid #344151; }
+    .up { color: #40d68a; } .down { color: #ff8585; }
+  </style>
+</head>
+<body>
+  <header><div><h1>Smart CDN — Live Routes</h1><div class="muted">Refreshes once per second from results/live_routes.json</div></div><div id="mode">Mode: waiting</div></header>
+  <p id="error"></p>
+  <section class="card">
+    <svg viewBox="0 0 1000 390" role="img" aria-label="Smart CDN network topology">
+      <path id="direct" class="link" d="M210 185 L470 185"/><path id="detour-a" class="link" d="M210 185 L360 310"/><path id="detour-b" class="link" d="M360 310 L470 185"/>
+      <path class="link" d="M470 185 L760 90"/><path class="link" d="M470 185 L760 190"/><path class="link" d="M470 185 L760 290"/>
+      <circle class="node" cx="110" cy="185" r="55"/><text x="110" y="180">Clients</text><text x="110" y="202">c1–c6</text>
+      <circle class="node" cx="210" cy="185" r="38"/><text x="210" y="190">s1</text>
+      <circle class="node" cx="360" cy="310" r="38"/><text x="360" y="315">s5</text>
+      <circle class="node" cx="470" cy="185" r="42"/><text x="470" y="190">s2</text>
+      <circle class="node" cx="760" cy="90" r="42"/><text x="760" y="95">srv1</text>
+      <circle class="node" cx="760" cy="190" r="42"/><text x="760" y="195">srv2</text>
+      <circle class="node" cx="760" cy="290" r="42"/><text x="760" y="295">srv3</text>
+      <text x="335" y="160">primary — s1–s2</text><text x="300" y="260">detour</text>
+    </svg>
+  </section>
+  <section class="card"><h2>Server and path state</h2><table><thead><tr><th>Server</th><th>Status</th><th>RTT</th><th>Utilization</th><th>Active connections</th></tr></thead><tbody id="servers"></tbody></table><p id="updated" class="muted">No telemetry yet.</p></section>
+<script>
+const routeFile = '../results/live_routes.json';
+async function refresh() {
+  try {
+    const response = await fetch(`${routeFile}?t=${Date.now()}`, {cache: 'no-store'});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const state = await response.json();
+    const detour = Boolean(state.detour_active);
+    document.getElementById('direct').className = `link ${detour ? '' : 'active'}`;
+    document.getElementById('detour-a').className = `link ${detour ? 'detour' : ''}`;
+    document.getElementById('detour-b').className = `link ${detour ? 'detour' : ''}`;
+    document.getElementById('mode').textContent = `Mode: ${state.cdn_mode || 'unknown'} · route: ${detour ? 's5 detour' : 'direct'}`;
+    document.getElementById('servers').innerHTML = Object.entries(state.servers || {}).map(([id, s]) =>
+      `<tr><td>${id}</td><td class="${s.status === 'UP' ? 'up' : 'down'}">${s.status || 'UNKNOWN'}</td><td>${Number(s.rtt_ms || 0).toFixed(2)} ms</td><td>${(Number(s.utilization || 0) * 100).toFixed(1)}%</td><td>${Number(s.active_conns || 0)}</td></tr>`).join('');
+    document.getElementById('updated').textContent = `Updated ${new Date(Number(state.timestamp) * 1000).toLocaleTimeString()}`;
+    document.getElementById('error').textContent = '';
+  } catch (error) { document.getElementById('error').textContent = `Telemetry unavailable: ${error.message}. Serve this page from the project root over HTTP.`; }
+}
+refresh(); setInterval(refresh, 1000);
+</script>
+</body>
+</html>

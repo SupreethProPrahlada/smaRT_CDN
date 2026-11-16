@@ -7,7 +7,7 @@ from mininet.log import setLogLevel
 import sys, os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from config.settings import CLIENT_IPS, CLIENT_MACS, SERVERS, OFP_CONTROLLER_PORT
+from config.settings import CLIENT_IPS, CLIENT_MACS, LOADSRC_IP, LOADSRC_MAC, SERVERS, OFP_CONTROLLER_PORT
 
 class SmartCDNTopo(Topo):
     def build(self):
@@ -15,6 +15,7 @@ class SmartCDNTopo(Topo):
         s2 = self.addSwitch('s2', protocols='OpenFlow13')
         s3 = self.addSwitch('s3', protocols='OpenFlow13')
         s4 = self.addSwitch('s4', protocols='OpenFlow13')
+        s5 = self.addSwitch('s5', protocols='OpenFlow13')
 
         for c_id, ip in CLIENT_IPS.items():
             self.addLink(self.addHost(c_id, ip=f"{ip}/24", mac=CLIENT_MACS[c_id]), s1, cls=TCLink, bw=100, delay='1ms')
@@ -26,6 +27,9 @@ class SmartCDNTopo(Topo):
         self.addLink(s1, s2, cls=TCLink, bw=100, delay='5ms')   # Primary
         self.addLink(s1, s3, cls=TCLink, bw=50, delay='20ms')   # Secondary
         self.addLink(s1, s4, cls=TCLink, bw=10, delay='50ms')   # Backup
+        self.addLink(s1, s5, cls=TCLink, bw=100, delay='7.5ms') # Detour leg 1
+        self.addLink(s5, s2, cls=TCLink, bw=100, delay='7.5ms') # Detour leg 2
+        self.addLink(self.addHost('loadsrc', ip=f'{LOADSRC_IP}/24', mac=LOADSRC_MAC), s1, cls=TCLink, bw=100, delay='1ms')
 
 if __name__ == '__main__':
     setLogLevel('info')
