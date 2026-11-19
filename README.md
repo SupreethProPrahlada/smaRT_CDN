@@ -135,11 +135,16 @@ sudo env "PATH=$PWD/.venv/bin:$PATH" "$PWD/.venv/bin/python" topology/topo.py
 ```
 
 ### 3. Start Edge Replica Servers (inside the Mininet CLI)
+Each server detects its own identity and address, so just run it from the host it belongs to:
 ```text
-mininet> srv1 python3 app/server.py --id srv1 --ip 10.0.0.11 &
-mininet> srv2 python3 app/server.py --id srv2 --ip 10.0.0.12 &
-mininet> srv3 python3 app/server.py --id srv3 --ip 10.0.0.13 &
+mininet> srv1 python3 app/server.py &
+mininet> srv2 python3 app/server.py &
+mininet> srv3 python3 app/server.py &
 ```
+
+You should see `srv1 listening on 10.0.0.11:8000`, and so on. Each server writes its PID to
+`/tmp/smartcdn_<id>.pid` so you can stop one replica at a time. The optional `--id`/`--ip`
+flags still work if you ever need to override detection.
 
 ### 4. Launch Live NOC Dashboard (Terminal 3)
 ```bash
@@ -186,7 +191,7 @@ mininet> srv1 sha256sum /tmp/cdn_content/test_100M.bin
 **Server failover (FR-4, FR-7).** Start a download, then kill the replica it uses (check the route map or the `[Route Decision]` log):
 ```text
 mininet> c2 python3 app/client.py --id c2 --file test_100M.bin --hash <SHA256> &
-mininet> srv1 pkill -f "server.py --id srv1"
+mininet> srv1 kill $(cat /tmp/smartcdn_srv1.pid)
 ```
 About 10 s later the controller logs `[Failover] srv1 DOWN`, and the client finishes on another replica: `Download PASS ... retries=N`. Restart srv1 with the Step 3 command; the controller logs `[Failover] srv1 UP`.
 

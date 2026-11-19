@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="2">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart CDN Route Map</title>
+<style>
+:root { --bg:#f7f7f5; --fg:#1d1d1b; --muted:#6b6b66; --card:#fff; --line:#d6d6d0;
+  --ok:#2f8f4e; --warm:#c98a12; --hot:#c7362f; --down:#9a9a94; --sw:#3b5b8c; }
+@media (prefers-color-scheme: dark) { :root { --bg:#161614; --fg:#ecece8; --muted:#9a9a94;
+  --card:#22221f; --line:#3a3a36; --sw:#7c9fd6; } }
+body { margin:0; padding:16px; font:15px/1.4 system-ui,sans-serif; background:var(--bg); color:var(--fg); }
+h1 { font-size:20px; margin:0 0 4px; } .muted, .sub { color:var(--muted); fill:var(--muted); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin-top:12px; }
+svg { width:100%; max-width:780px; height:auto; display:block; }
+.link { stroke-linecap:round; } .ok { stroke:var(--ok); } .warm { stroke:var(--warm); }
+.hot { stroke:var(--hot); } .link.down { stroke:var(--down); stroke-dasharray:6 6; }
+.label { font-size:12px; text-anchor:middle; fill:var(--fg); paint-order:stroke;
+  stroke:var(--card); stroke-width:5px; stroke-linejoin:round; } .sub { font-size:11px; text-anchor:middle; }
+.node text { text-anchor:middle; font-weight:600; fill:#fff; }
+.node rect { stroke:none; } .switch rect { fill:var(--sw); } .host rect { fill:var(--muted); }
+.up rect { fill:var(--ok); } .node.down rect { fill:var(--hot); }
+table { border-collapse:collapse; width:100%; } th, td { text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); }
+.stale { color:var(--hot); font-weight:600; }
+</style></head><body>
+<h1>Smart CDN Route Map</h1>
+<div class="muted">Mode: dynamic · srv1 path: <strong>detour</strong>
+ · thick line = srv1's active path · green &lt;50%, amber &lt;80%, red busy, grey dashed = down</div>
+<p class="stale">Controller data is 366s old: is the controller running?</p>
+<div class="card"><svg viewBox="0 0 780 360" role="img" aria-label="Topology with live path state"><line class="link ok" x1="70" y1="210" x2="230" y2="210" stroke-width="3"/><line class="link down" x1="230" y1="210" x2="530" y2="110" stroke-width="3"/><text class="label" x="380.0" y="152.0">primary 12.0 ms · 0%</text><line class="link ok" x1="230" y1="210" x2="380" y2="60" stroke-width="6"/><text class="label" x="305.0" y="127.0">detour 31.7 ms · 0%</text><line class="link ok" x1="380" y1="60" x2="530" y2="110" stroke-width="6"/><line class="link ok" x1="530" y1="110" x2="530" y2="30" stroke-width="3"/><line class="link down" x1="230" y1="210" x2="530" y2="210" stroke-width="3"/><text class="label" x="380.0" y="202.0">41.7 ms · 0%</text><line class="link down" x1="230" y1="210" x2="530" y2="310" stroke-width="3"/><text class="label" x="380.0" y="252.0">101.7 ms · 0%</text><line class="link down" x1="530" y1="110" x2="700" y2="110" stroke-width="3"/><line class="link down" x1="530" y1="210" x2="700" y2="210" stroke-width="3"/><line class="link down" x1="530" y1="310" x2="700" y2="310" stroke-width="3"/><g class="node host"><rect x="28" y="192" width="84" height="36" rx="8"/><text x="70" y="215">clients</text></g><text class="sub" x="70" y="244">c1-c6</text><g class="node switch"><rect x="188" y="192" width="84" height="36" rx="8"/><text x="230" y="215">s1</text></g><g class="node switch"><rect x="488" y="92" width="84" height="36" rx="8"/><text x="530" y="115">s2</text></g><g class="node switch"><rect x="488" y="192" width="84" height="36" rx="8"/><text x="530" y="215">s3</text></g><g class="node switch"><rect x="488" y="292" width="84" height="36" rx="8"/><text x="530" y="315">s4</text></g><g class="node switch"><rect x="338" y="42" width="84" height="36" rx="8"/><text x="380" y="65">s5</text></g><g class="node host"><rect x="488" y="12" width="84" height="36" rx="8"/><text x="530" y="35">bg</text></g><g class="node down"><rect x="658" y="92" width="84" height="36" rx="8"/><text x="700" y="115">srv1</text></g><text class="sub" x="700" y="144">DOWN</text><g class="node down"><rect x="658" y="192" width="84" height="36" rx="8"/><text x="700" y="215">srv2</text></g><text class="sub" x="700" y="244">DOWN</text><g class="node down"><rect x="658" y="292" width="84" height="36" rx="8"/><text x="700" y="315">srv3</text></g><text class="sub" x="700" y="344">DOWN</text></svg></div>
+<div class="card"><table><thead><tr><th>Client</th><th>Server</th><th>Path</th><th>Mbit/s</th></tr></thead>
+<tbody><tr><td colspan="4" class="muted">No active flows</td></tr></tbody></table></div>
+</body></html>

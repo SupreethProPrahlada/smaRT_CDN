@@ -14,7 +14,49 @@ from config.settings import (
     HB_LISTEN_IP,
     HB_PORT,
     HEARTBEAT_INTERVAL,
+    SERVERS,
 )
+
+
+def _detect_bind_ip():
+    """Return the local address this host would use to reach the heartbeat listener."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect((HB_LISTEN_IP, HB_PORT))
+        return probe.getsockname()[0]
+    finally:
+        probe.close()
+
+
+def _resolve_identity(server_id, bind_ip, parser):
+    """Resolve --id/--ip to a canonical (srvN, address) pair.
+
+    Accepts srv1/srv2/srv3 or the matching server IP, and auto-detects both when
+    omitted, so ``python3 app/server.py`` is enough inside a Mininet host.
+    """
+    if bind_ip is None:
+        try:
+            bind_ip = _detect_bind_ip()
+        except OSError as exc:
+            parser.error(f"could not detect the local server IP ({exc}); pass --ip")
+
+    if server_id not in SERVERS:
+        by_ip = next(
+            (sid for sid, info in SERVERS.items() if info["ip"] == (server_id or bind_ip)),
+            None,
+        )
+        if by_ip is None:
+            choices = ", ".join(sorted(SERVERS))
+            parser.error(
+                f"--id must be one of {choices} or the matching server IP "
+                f"(got {server_id!r})"
+            )
+        server_id = by_ip
+
+    expected_ip = SERVERS[server_id]["ip"]
+    if bind_ip != expected_ip:
+        parser.error(f"--ip for {server_id} must be {expected_ip} (got {bind_ip})")
+    return server_id, bind_ip
 
 
 class ContentServer:
@@ -29,6 +71,7 @@ class ContentServer:
 
     def heartbeat_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        failing = False
 
         while self.running:
             try:
@@ -40,8 +83,13 @@ class ContentServer:
                     f"{time.time():.3f}\n"
                 )
                 sock.sendto(message.encode(), (HB_LISTEN_IP, HB_PORT))
-            except OSError:
-                pass
+                if failing:
+                    print(f"{self.server_id} heartbeat sending again", flush=True)
+                failing = False
+            except OSError as exc:
+                if not failing:
+                    print(f"{self.server_id} heartbeat send failed: {exc}", flush=True)
+                failing = True
 
             time.sleep(HEARTBEAT_INTERVAL)
 
@@ -118,6 +166,10 @@ class ContentServer:
             sock.close()
 
     def start(self):
+        pid_path = f"/tmp/smartcdn_{self.server_id}.pid"
+        with open(pid_path, "w") as pid_file:
+            pid_file.write(f"{os.getpid()}\n")
+
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
 
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -132,20 +184,35 @@ class ContentServer:
             f"{self.bind_ip}:{self.port}"
         )
 
-        while self.running:
-            conn, addr = server_socket.accept()
-            threading.Thread(
-                target=self.handle_client,
-                args=(conn, addr),
-                daemon=True,
-            ).start()
+        try:
+            while self.running:
+                conn, addr = server_socket.accept()
+                threading.Thread(
+                    target=self.handle_client,
+                    args=(conn, addr),
+                    daemon=True,
+                ).start()
+        finally:
+            server_socket.close()
+            try:
+                os.unlink(pid_path)
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--id", required=True)
-    parser.add_argument("--ip", required=True)
+    parser = argparse.ArgumentParser(
+        description=(
+            "Smart CDN content server. Run it inside its Mininet host; the "
+            "server identity and bind address are detected automatically."
+        )
+    )
+    parser.add_argument(
+        "--id", help="server ID (srv1/srv2/srv3 or its IP); auto-detected if omitted"
+    )
+    parser.add_argument("--ip", help="bind address; auto-detected if omitted")
     parser.add_argument("--port", type=int, default=CONTENT_PORT)
     args = parser.parse_args()
 
-    ContentServer(args.id, args.ip, args.port).start()
+    server_id, bind_ip = _resolve_identity(args.id, args.ip, parser)
+    ContentServer(server_id, bind_ip, args.port).start()
